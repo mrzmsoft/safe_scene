@@ -1,5 +1,5 @@
 name: safe_scene
-description: "A new Flutter project."
+description: "Safe Scene - a local, privacy-first Flutter desktop video player that automatically skips and mutes explicit scenes based on timestamp rules."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -34,6 +34,21 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+
+  # Native libmpv powered video playback engine.
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  # Bundled libmpv binaries for Windows desktop.
+  media_kit_libs_windows_video: ^1.0.10
+
+  # Native file dialogs for opening media files.
+  file_picker: ^10.1.5
+
+  # Encrypted local storage for the Master PIN & safety settings.
+  flutter_secure_storage: ^9.2.4
+
+  # Desktop window fullscreen control (for the F / Esc shortcuts).
+  window_manager: ^0.4.3
 
 dev_dependencies:
   flutter_test:
