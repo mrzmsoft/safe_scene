@@ -1,0 +1,213 @@
+# ============================================
+# SafeScene - Project-wide .gitignore
+# Tauri 2 + React + TypeScript + Python / Windows
+# ============================================
+
+# ---------- Node.js / React / TypeScript ----------
+node_modules/
+dist/
+build/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+
+# ---------- Tauri / Rust ----------
+src-tauri/target/
+src-tauri/gen/schemas/
+*.rs.bk
+
+# ---------- Python ----------
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+python_env/
+py_env/
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.python-version
+
+# Packaging / distribution
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+wheelhouse/
+wheels/
+
+# ---------- IDE / Editor ----------
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+
+# JetBrains (PyCharm / IntelliJ / WebStorm)
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Other editors
+.vscode/
+*.swp
+*.swo
+*~
+.vim/
+.vscode-server/
+
+# ---------- OS / Windows ----------
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS (for future cross-platform support)
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*.~lock
+.directory
+
+# ---------- SQLite ----------
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Temporary SQLite files
+*.db-tmp
+*.db.bak
+*.db.old
+
+# ---------- Downloaded AI Models ----------
+# Model directories
+models/
+ai-models/
+engine/models/
+engine/ai-models/
+
+# Common model file extensions
+*.onnx
+*.bin
+*.gguf
+*.safetensors
+*.pth
+*.pt
+*.ckpt
+*.pb
+*.tflite
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.joblib
+
+# Whisper models
+*.ct2/
+ct2/
+faster-whisper/
+engine/faster-whisper/
+
+# ---------- Generated Analysis / Cache Files ----------
+# Analysis output
+analysis/
+analysis-output/
+engine/analysis/
+engine/output/
+generated/
+
+# Media analysis cache
+.cache/
+*.cache
+engine/.cache/
+engine/tmp/
+tmp/
+*.tmp
+
+# FFmpeg temporary work files
+*.ffprobe.cache
+*.ffmetadata
+*.nut
+
+# GPU / runtime caches
+*.ptx
+*.cubin
+*.cuda_cache/
+.cuda_cache/
+
+# Thumbnails / previews
+*.thumbnails/
+.thumbnails/
+
+# ---------- Logs ----------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ---------- Environment / Secrets ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# ---------- Misc ----------
+# Coverage
+coverage/
+.htmlcov/
+.tox/
+.nox/
+
+# Test artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+
+# Dependencies lockfiles that should be gitignored if using conda
+conda-env.yml
+
+# User-specific files
+*.user
+*.userosscache
+*.sln.docstates
+
+# Created by Tauri (https://tauri.app)
+# Keep the following lines if Tauri is used
+/src-tauri/gen/*
+/src-tauri/gen/schemas/*
+# End of Tauri-specific ignores
+
+# npm
+.npm/
+.npmrc
+
+# Yarn (if used)
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
