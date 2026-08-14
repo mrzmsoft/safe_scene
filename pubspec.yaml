@@ -50,6 +50,9 @@ dependencies:
   # Desktop window fullscreen control (for the F / Esc shortcuts).
   window_manager: ^0.4.3
 
+  # Streaming SHA-256 hashing for matching a media file to its .safe rule set.
+  crypto: ^3.0.6
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

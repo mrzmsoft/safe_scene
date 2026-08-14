@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -7,6 +6,8 @@ import 'package:flutter/material.dart';
 
 import '../controllers/safe_player_controller.dart';
 import '../models/filter_segment.dart';
+import '../services/scanner_service.dart';
+import '../widgets/scan_dialog.dart';
 import 'video_player_page.dart';
 
 /// The landing screen for Safe Scene.
@@ -22,6 +23,10 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  /// Drives the offline scanner engine and keeps a single long-lived instance
+  /// so the in-flight [ScannerService.progress] stream survives dialog rebuilds.
+  final ScannerService _scanner = ScannerService();
+
   static const List<String> _videoExtensions = [
     'mp4',
     'mkv',
@@ -60,35 +65,58 @@ class _HomePageState extends State<HomePage> {
       final path = result.files.single.path;
       if (path == null) throw const FormatException('No file path returned.');
 
-      final segments = await _loadRulesFor(path);
+      // 1. Auto-load an existing rule set (by name or content hash).
+      final existing = await _scanner.findExistingRule(path);
       if (!mounted) return;
-
-      final controller = SafePlayerController(
-        segments: segments,
-        onSkip: (s) => debugPrint('SafeScene: skipped ${s.category}'),
-      );
-
-      // Open the media before navigating so the first frame is ready sooner.
-      await controller.openPath(path);
-
-      if (!mounted) {
-        await controller.dispose();
+      if (existing != null) {
+        if (kDebugMode) {
+          debugPrint('SafeScene: auto-loaded ${existing.segments.length} '
+              'rules for ${path.split(Platform.pathSeparator).last}');
+        }
+        await _startPlayback(path, existing.segments);
         return;
       }
 
-      final title = path.split(Platform.pathSeparator).last;
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => VideoPlayerPage(
-            controller: controller,
-            title: title,
-            autoplay: true,
-          ),
-        ),
-      );
+      // 2. No rules found — offer to auto-scan for Family Mode.
+      final wantsScan = await _askAutoScan();
+      if (!mounted) return;
+      if (wantsScan != true) {
+        await _startPlayback(path, const []);
+        return;
+      }
 
-      // Disposal happens once the player screen is popped.
-      await controller.dispose();
+      // 3. Run the scan. The future is owned here so "Run in Background" can
+      //    dismiss the dialog yet still resolve to a result later.
+      final scanFuture = _scanner.scan(path);
+      final reason = await ScanDialogWidget.show(
+        context,
+        scanner: _scanner,
+        inputPath: path,
+        scanFuture: scanFuture,
+      );
+      if (!mounted) return;
+
+      switch (reason) {
+        case ScanDialogCloseReason.cancelled:
+          return; // User bailed; keep the video unplayed.
+        case ScanDialogCloseReason.completed:
+        case ScanDialogCloseReason.background:
+          if (reason == ScanDialogCloseReason.background) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Scanning in the background — opening the '
+                      'movie will resume once it finishes.'),
+                ),
+              );
+            }
+          }
+          final scanResult = await scanFuture;
+          if (!mounted) return;
+          await _startPlayback(path, scanResult.segments);
+      }
+    } on ScannerCancelledException {
+      // Silently ignore an explicit cancel; nothing else to do.
     } catch (e) {
       if (mounted) setState(() => _lastError = e.toString());
     } finally {
@@ -96,35 +124,67 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// Attempts to read `<videoName>.safe.json` sitting next to [videoPath] and
-  /// deserialize its `segments`. Returns an empty list when absent/invalid.
-  Future<List<FilterSegment>> _loadRulesFor(String videoPath) async {
-    try {
-      final dir = File(videoPath).parent.path;
-      final base = videoPath.split(Platform.pathSeparator).last;
-      final noExt = base.contains('.')
-          ? base.substring(0, base.lastIndexOf('.'))
-          : base;
-      final rulePath = '$dir${Platform.pathSeparator}$noExt.safe.json';
+  /// Asks the user whether to auto-scan the selected movie for Family Mode.
+  Future<bool?> _askAutoScan() {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        title: const Text(
+          'Auto-scan for Family Mode?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'No filter rules were found for this movie. Would you like to '
+          'auto-scan this movie for Family Mode?',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Not Now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Scan'),
+          ),
+        ],
+      ),
+    );
+  }
 
-      final file = File(rulePath);
-      if (!await file.exists()) return const [];
+  /// Builds a [SafePlayerController] from [segments], opens the media and
+  /// navigates to the player. Disposes the controller when popped.
+  Future<void> _startPlayback(
+    String path,
+    List<FilterSegment> segments,
+  ) async {
+    final controller = SafePlayerController(
+      segments: segments,
+      onSkip: (s) => debugPrint('SafeScene: skipped ${s.category}'),
+    );
 
-      final decoded =
-          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      final rawSegments = decoded['segments'] as List<dynamic>? ?? const [];
-      final segments = rawSegments
-          .map((e) => FilterSegment.fromJson(e as Map<String, dynamic>))
-          .toList();
+    // Open the media before navigating so the first frame is ready sooner.
+    await controller.openPath(path);
 
-      if (kDebugMode) {
-        debugPrint('SafeScene: loaded ${segments.length} rules from $rulePath');
-      }
-      return segments;
-    } catch (e) {
-      debugPrint('SafeScene: could not load rules: $e');
-      return const [];
+    if (!mounted) {
+      await controller.dispose();
+      return;
     }
+
+    final title = path.split(Platform.pathSeparator).last;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => VideoPlayerPage(
+          controller: controller,
+          title: title,
+          autoplay: true,
+        ),
+      ),
+    );
+
+    // Disposal happens once the player screen is popped.
+    await controller.dispose();
   }
 
   @override

@@ -1,0 +1,361 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import '../models/scan_progress.dart';
+import '../utils/file_hash.dart';
+
+/// Thrown when the bundled scanner binary cannot be found or the scan fails.
+class ScannerException implements Exception {
+  const ScannerException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'ScannerException: $message';
+}
+
+/// Thrown when the user requests [ScannerService.cancel].
+class ScannerCancelledException extends ScannerException {
+  const ScannerCancelledException() : super('Scan cancelled by user.');
+}
+
+/// Runs the bundled `scanner_engine.exe` as a child process and streams its
+/// machine-readable `PROGRESS:` / `RESULT:` lines back to callers.
+///
+/// # Protocol (produced by the offline worker)
+/// * `PROGRESS:<0.0..1.0>` on stdout — real-time completion fraction.
+/// * `RESULT:<json>` on stdout — the final `movie.safe.json` payload.
+/// * `[scanner] ...` diagnostic lines on stderr — used to derive the live
+///   "Visual scenes flagged" / "Profanities flagged" counters.
+///
+/// Only one scan runs at a time per service instance; concurrent calls throw.
+class ScannerService {
+  ScannerService({String? executablePath, String? modelsDir})
+      : _executablePath = executablePath,
+        _modelsDir = modelsDir;
+
+  final String? _executablePath;
+  final String? _modelsDir;
+
+  final StreamController<ScanProgress> _progress =
+      StreamController<ScanProgress>.broadcast();
+
+  Process? _process;
+  bool _cancelRequested = false;
+
+  /// Live progress events for the currently running (or last completed) scan.
+  Stream<ScanProgress> get progress => _progress.stream;
+
+  /// Whether a scan is currently in flight.
+  bool get isRunning => _process != null;
+
+  /// Requests a graceful kill of the running child process.
+  ///
+  /// Is a no-op when nothing is running. The in-flight [scan] future completes
+  /// with a [ScannerCancelledException].
+  Future<void> cancel() async {
+    _cancelRequested = true;
+    final process = _process;
+    if (process == null) return;
+    try {
+      process.kill();
+    } catch (_) {
+      // The process may have already exited; nothing else to do.
+    }
+  }
+
+  // --------------------------------------------------------------------
+  // Executable resolution (bundled + dev-mode fallbacks)
+  // --------------------------------------------------------------------
+  static const String name = 'scanner_engine.exe';
+  static const String scriptName = 'scanner_engine.py';
+
+  /// Resolves the argv of the scanner command. Prefers a bundled .exe, then a
+  /// dev-mode `python scanner_engine.py` fallback so the engine can run before
+  /// it is compiled. Returns null when neither is available.
+  List<String>? resolveCommand() {
+    final override = _executablePath;
+    if (override != null && File(override).existsSync()) {
+      return [override];
+    }
+    final exe = _findInBundleRepos(name);
+    if (exe != null) return [exe];
+    final script = _findInBundleRepos(scriptName);
+    if (script != null) {
+      return [Platform.isWindows ? 'python' : 'python3', script];
+    }
+    return null;
+  }
+
+  static String? _findInBundleRepos(String fileName) {
+    final env = Platform.environment['SAFE_SCENE_SCANNER'];
+    if (env != null && env.isNotEmpty && File(env).existsSync()) {
+      return env;
+    }
+    final candidates = <String>[];
+    try {
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      candidates.addAll([
+        '$exeDir${Platform.pathSeparator}$fileName',
+        '$exeDir${Platform.pathSeparator}bin${Platform.pathSeparator}$fileName',
+      ]);
+    } catch (_) {
+      // resolvedExecutable is unavailable in some contexts (e.g. tests).
+    }
+    candidates.add(fileName); // current working directory
+    for (final candidate in candidates) {
+      if (File(candidate).existsSync()) return candidate;
+    }
+    return null;
+  }
+  // --------------------------------------------------------------------
+  // Live scan
+  // --------------------------------------------------------------------
+
+  /// Diagnostic-line matchers emitted by the worker on stderr. They let the UI
+  /// show running "visual / profanity" counters before the final RESULT arrives.
+  static final RegExp _visualRe = RegExp(r'Visual:\s+(\d+)\s+flagged frames');
+  static final RegExp _profanityRe = RegExp(r'(\d+)\s+profanity hits');
+  static final RegExp _segmentsRe = RegExp(r'Wrote\s+(\d+)\s+segments');
+
+  /// Maps a completion fraction onto a meaningful [ScanPhase] so the dialog can
+  /// show "Audio"/"Video" instead of a bare percentage. The thresholds mirror
+  /// the `PROGRESS:` fractions the Python engine actually emits.
+  static ScanPhase _phaseFor(double fraction) {
+    if (fraction >= 1.0) return ScanPhase.done;
+    if (fraction >= 0.95) return ScanPhase.finalizing;
+    if (fraction >= 0.42) return ScanPhase.video;
+    if (fraction >= 0.05) return ScanPhase.audio;
+    return ScanPhase.preparing;
+  }
+
+  /// Launches the scanner against [inputPath] and resolves with a parsed
+  /// [ScanResult] when the engine prints its `RESULT:<json>` line.
+  ///
+  /// Progress (and the live counters) are surfaced through [progress] as they
+  /// arrive, so the caller can drive a UI while this future is pending.
+  ///
+  /// Throws [ScannerException] if the binary is missing or the process exits
+  /// without a result, and [ScannerCancelledException] if [cancel] was invoked.
+  ///
+  /// Only one scan may run at a time; a second concurrent call throws.
+  Future<ScanResult> scan(
+    String inputPath, {
+    String? outputPath,
+    String? modelsDir,
+  }) async {
+    modelsDir ??= _modelsDir;
+
+    if (_process != null) {
+      throw const ScannerException('A scan is already running.');
+    }
+
+    final command = resolveCommand();
+    if (command == null) {
+      throw const ScannerException(
+        'Could not locate the scanner engine. Set SAFE_SCENE_SCANNER or '
+        'bundle scanner_engine.exe next to the app.',
+      );
+    }
+
+    final arguments = <String>[
+      '--input', inputPath,
+      if (outputPath != null) ...['--output', outputPath],
+      if (modelsDir != null) ...['--models-dir', modelsDir],
+    ];
+
+    Process process;
+    try {
+      process = await Process.start(command.first, [
+        ...command.skip(1),
+        ...arguments,
+      ]);
+    } catch (e) {
+      _process = null;
+      throw ScannerException('Failed to launch scanner: $e');
+    }
+
+    _process = process;
+    _cancelRequested = false;
+
+    final completer = Completer<ScanResult>();
+    var latest = const ScanProgress.initial();
+    String? resultJson;
+
+    void emit(ScanProgress next) {
+      latest = next;
+      if (!_progress.isClosed) _progress.add(next);
+    }
+
+    emit(latest.copyWith(
+      phase: ScanPhase.preparing,
+      message: 'Launching scanner…',
+    ));
+
+    void complete(ScanResult result) {
+      if (!completer.isCompleted) completer.complete(result);
+    }
+
+    void fail(Object error) {
+      if (!completer.isCompleted) completer.completeError(error);
+    }
+
+    final outSub = process.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen(
+      (line) {
+        if (line.startsWith('PROGRESS:')) {
+          final value = double.tryParse(
+            line.substring('PROGRESS:'.length).trim(),
+          );
+          if (value != null) {
+            final fraction = value.clamp(0.0, 1.0);
+            emit(latest.copyWith(
+              percentage: fraction,
+              phase: _phaseFor(fraction),
+            ));
+          }
+        } else if (line.startsWith('RESULT:')) {
+          resultJson = line.substring('RESULT:'.length).trim();
+        }
+      },
+      onError: (Object e) => fail(ScannerException('stdout error: $e')),
+    );
+
+    final errSub = process.stderr
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen(
+      (line) {
+        final parsed = _parseCounterLine(line, latest);
+        if (parsed != null) emit(parsed);
+      },
+      onError: (_) {/* stderr is diagnostic only; ignore */},
+    );
+
+    process.exitCode.then((code) async {
+      await outSub.cancel();
+      await errSub.cancel();
+      _process = null;
+
+      if (_cancelRequested) {
+        fail(const ScannerCancelledException());
+        return;
+      }
+
+      if (resultJson != null) {
+        try {
+          final json = jsonDecode(resultJson!) as Map<String, dynamic>;
+          final result = ScanResult.fromJson(json);
+          emit(latest.copyWith(
+            percentage: 1.0,
+            phase: ScanPhase.done,
+            segmentsFound: result.segments.length,
+            message: 'Scan complete',
+          ));
+          complete(result);
+        } catch (e) {
+          fail(ScannerException('Failed to parse RESULT payload: $e'));
+        }
+        return;
+      }
+
+      fail(ScannerException(
+        'Scanner exited (code $code) without producing a RESULT.',
+      ));
+    });
+
+    return completer.future;
+  }
+
+  /// Updates the running visual/profanity/segment counters from a `[scanner]`
+  /// diagnostic line, or returns null when the line carries no counter.
+  static ScanProgress? _parseCounterLine(String line, ScanProgress current) {
+    final visual = _visualRe.firstMatch(line);
+    if (visual != null) {
+      return current.copyWith(visualFlagged: int.parse(visual.group(1)!));
+    }
+    final profanity = _profanityRe.firstMatch(line);
+    if (profanity != null) {
+      return current.copyWith(profanityFlagged: int.parse(profanity.group(1)!));
+    }
+    final segments = _segmentsRe.firstMatch(line);
+    if (segments != null) {
+      return current.copyWith(segmentsFound: int.parse(segments.group(1)!));
+    }
+    return null;
+  }
+
+  // --------------------------------------------------------------------
+  // Auto-loader
+  // --------------------------------------------------------------------
+
+  /// Looks for a pre-computed rule file for [videoPath] and returns it parsed,
+  /// or null when none is available.
+  ///
+  /// Two strategies are tried:
+  ///   1. **Name match** — `<name>.safe.json` / `<name>.safe` next to the video.
+  ///   2. **Hash match** — any `.safe.json` / `.safe` in the same directory whose
+  ///      recorded `media_hash` equals the SHA-256 of [videoPath]'s contents.
+  Future<ScanResult?> findExistingRule(String videoPath) async {
+    final file = File(videoPath);
+    if (!await file.exists()) return null;
+
+    final dir = file.parent.path;
+    final base = file.uri.pathSegments.last;
+    final noExt = base.contains('.')
+        ? base.substring(0, base.lastIndexOf('.'))
+        : base;
+
+    final nameCandidates = [
+      '$dir${Platform.pathSeparator}$noExt.safe.json',
+      '$dir${Platform.pathSeparator}$noExt.safe',
+    ];
+    for (final candidate in nameCandidates) {
+      final parsed = await _tryParseRule(File(candidate));
+      if (parsed != null) return parsed;
+    }
+
+    final videoHash = await _hashOrNull(videoPath);
+    if (videoHash == null) return null;
+
+    await for (final entity in file.parent.list()) {
+      if (entity is! File) continue;
+      final lower = entity.path.toLowerCase();
+      if (!lower.endsWith('.safe.json') && !lower.endsWith('.safe')) continue;
+      final parsed = await _tryParseRule(entity);
+      if (parsed != null && parsed.mediaHash == videoHash) return parsed;
+    }
+
+    return null;
+  }
+
+  static Future<String?> _hashOrNull(String path) async {
+    try {
+      return await sha256FileHex(path);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<ScanResult?> _tryParseRule(File file) async {
+    if (!await file.exists()) return null;
+    try {
+      final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      return ScanResult.fromJson(json);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Releases the child process (if any) and closes the progress stream.
+  ///
+  /// Call once when the owning widget/provider is torn down.
+  Future<void> dispose() async {
+    _process?.kill();
+    _process = null;
+    if (!_progress.isClosed) await _progress.close();
+  }
+}
