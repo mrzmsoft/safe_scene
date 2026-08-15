@@ -202,10 +202,12 @@ class _SeekBarPainter extends CustomPainter {
           ),
           const Radius.circular(4),
         ),
-        Paint()..color = color.withValues(alpha: 0.28),
+        Paint()..color = color.withValues(alpha: segment.enabled ? 0.28 : 0.09),
       );
 
-      final linePaint = Paint()..color = color..strokeWidth = 2;
+      final linePaint = Paint()
+        ..color = color.withValues(alpha: segment.enabled ? 1.0 : 0.35)
+        ..strokeWidth = segment.enabled ? 2 : 1;
       canvas.drawLine(
         Offset(begin, centerY - trackHeight / 2 - 6),
         Offset(begin, centerY + trackHeight / 2 + 6),
@@ -259,7 +261,10 @@ class _SegmentTooltip extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  segment.category.isEmpty ? segment.action.label : segment.category,
+                  (segment.category.isEmpty
+                              ? segment.action.label
+                              : segment.category) +
+                      (segment.enabled ? '' : ' — disabled'),
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 12,

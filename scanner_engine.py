@@ -34,8 +34,12 @@ Behaviours
 Sub-systems (each degrades gracefully if its assets are missing):
   1. Audio  : ffmpeg -> 16 kHz mono WAV -> faster-whisper (word timestamps)
               or whisper.cpp subprocess -> profanity match -> "mute" segments.
-  2. Visual : ffmpeg -> 1.5 FPS JPEG frames -> ONNX Runtime NudeNet/NSFW
-              classifier/detector -> confidence > 0.65 -> "skip" segments.
+  2. Visual : ffmpeg -> 2.0 FPS JPEG frames -> one or more ONNX Runtime
+              NudeNet/NSFW detector/classifier models -> per-model confidence
+              gate (default 0.65) -> "skip" segments. With 2+ models the
+              per-frame votes are fused (visual_models.json config or
+              auto-discovery) and smoothed across neighbouring samples so a
+              single-model flicker cannot become a skip segment.
   3. Post   : merge same-action segments within 2.5 s, add 750 ms buffer.
   4. IPC    : PROGRESS:<0..1> lines on stdout; result written to disk and
               echoed as a single RESULT:<json> line.
@@ -63,13 +67,29 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Tuning constants
 # ---------------------------------------------------------------------------
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 AUDIO_SAMPLE_RATE = 16000          # Hz, per spec
-FRAME_FPS = 1.5                    # frames per second, per spec
+FRAME_FPS = 2.0                    # frames per second. 2.0 FPS (was 1.5) closes
+                                   # sampling gaps so brief explicit cuts are far
+                                   # less likely to slip between two sample frames.
 SAFETY_BUFFER_S = 0.750            # 750 ms, per spec
 MERGE_WINDOW_S = 2.5               # merge gap, per spec
-VISUAL_THRESHOLD = 0.65            # confidence gate, per spec
+VISUAL_THRESHOLD = 0.65            # default per-model confidence gate, per spec
 DEFAULT_CHUNK = 1 << 20            # 1 MiB, for hashing
+
+# Visual ensemble (opt-in). When a *second* ONNX model is present in the models
+# dir -- or a ``visual_models.json`` config file lists 2+ models -- the
+# per-frame votes of every model are fused (see _frame_confirm) and then
+# smoothed across neighbouring sample frames (see _temporal_confirm) so a
+# single-model flicker can no longer become a skip segment. A lone model keeps
+# the legacy behaviour exactly.
+VISUAL_CONFIG_NAME = "visual_models.json"
+VISUAL_AUTO_PATTERNS = ("nudenet", "nsfw", "nude", "yolo", "explicit", "adult")
+DEFAULT_RULE = "consensus"             # all | any | majority | consensus
+DEFAULT_CONFIRM_CONFIDENCE = 0.85      # majority votes at/above this confirm a frame
+DEFAULT_HARD_CONFIDENCE = 0.95         # any single vote at/above this confirms it
+VOTE_WINDOW = 2                        # +/- this many sample frames in the search
+VOTE_MIN = 2                           # min confirmed frames inside the window
 
 # Wall-clock budgets for the long-running child-process stages. They prevent a
 # slow or wedged tool from making the whole scan look frozen at one percentage:
@@ -750,8 +770,14 @@ def _frame_number(path: str) -> int:
 
 
 def load_model(onnx_path: str, models_dir: str | None,
-               providers_req: str | None = None, threads: int | None = None):
-    """Load the ONNX session + labels; returns (session, labels, model_type)."""
+               providers_req: str | None = None, threads: int | None = None,
+               labels_file: str | None = None):
+    """Load the ONNX session + labels; returns (session, labels, model_type).
+
+    ``labels_file`` optionally overrides the class list resolved for this
+    model (used by the visual ensemble so each model can carry its own
+    labels.json instead of sharing one global file).
+    """
     try:
         import onnxruntime as ort  # bundled at build time; optional  # type: ignore[import-not-found]
     except Exception as exc:  # noqa: BLE001
@@ -775,7 +801,7 @@ def load_model(onnx_path: str, models_dir: str | None,
     _log("ONNX active providers: " + ", ".join(active)
          + (f"; threads={threads}" if threads else "; threads=auto"))
     model_type = _classify_model(session)
-    labels = _load_labels(models_dir, model_type, session)
+    labels = _load_labels(models_dir, model_type, session, labels_file)
     return session, labels, model_type
 
 
@@ -820,11 +846,13 @@ def resolve_providers(requested: str | None) -> list:
 
 
 def _load_labels(models_dir: str | None, model_type: str,
-                 session=None) -> list:
-    """Resolve the class-name list, preferring (in order) a custom
-    ``labels.json``, the ONNX graph metadata ``names`` map (Ultralytics
-    exports embed it), then the built-in defaults."""
-    custom = find_file("labels.json", models_dir)
+                 session=None, labels_file: str | None = None) -> list:
+    """Resolve the class-name list, preferring (in order) an explicit
+    ``labels_file``, a custom ``labels.json``, the ONNX graph metadata
+    ``names`` map (Ultralytics exports embed it), then the built-in defaults."""
+    custom = find_file(labels_file, models_dir) if labels_file else None
+    if not custom:
+        custom = find_file("labels.json", models_dir)
     if custom:
         try:
             with open(custom, "r", encoding="utf-8") as fh:
@@ -1027,71 +1055,346 @@ def _interpret_classifier(outs, labels, threshold, safe_idx):
     return conf, label
 
 
+# ---------------------------------------------------------------------------
+# Visual ensemble: model discovery, per-frame fusion, temporal confirmation
+# ---------------------------------------------------------------------------
+def _visual_config_path(models_dir, override_path=None) -> str | None:
+    """Resolve the active visual-models config file (CLI override wins)."""
+    if override_path and os.path.isfile(override_path):
+        return override_path
+    if models_dir:
+        path = os.path.join(models_dir, VISUAL_CONFIG_NAME)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _clean_float(value, default):
+    """Parse a positive confidence value in (0, 1] or fall back to default."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return default
+    return f if 0.0 < f <= 1.0 else default
+
+
+def _clean_int(value, default):
+    """Parse a positive integer or fall back to default."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return n if n >= 1 else default
+
+
+def load_visual_config(models_dir, override_path=None) -> dict:
+    """Read + validate the visual ensemble config (or return the defaults)."""
+    base = {
+        "models": [],
+        "rule": DEFAULT_RULE,
+        "confirm_confidence": DEFAULT_CONFIRM_CONFIDENCE,
+        "hard_confidence": DEFAULT_HARD_CONFIDENCE,
+        "vote_window": VOTE_WINDOW,
+        "min_votes": VOTE_MIN,
+    }
+    path = _visual_config_path(models_dir, override_path)
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            if isinstance(raw, dict):
+                base.update(raw)
+            else:
+                _log(f"{VISUAL_CONFIG_NAME} must be a JSON object; using defaults.")
+        except (OSError, ValueError) as exc:
+            _log(f"Could not read {path}: {exc}; using defaults.")
+    cfg = dict(base)
+    cfg["rule"] = str(cfg.get("rule") or DEFAULT_RULE).lower()
+    cfg["confirm_confidence"] = _clean_float(
+        cfg.get("confirm_confidence"), DEFAULT_CONFIRM_CONFIDENCE)
+    cfg["hard_confidence"] = _clean_float(
+        cfg.get("hard_confidence"), DEFAULT_HARD_CONFIDENCE)
+    cfg["vote_window"] = _clean_int(cfg.get("vote_window"), VOTE_WINDOW)
+    cfg["min_votes"] = _clean_int(cfg.get("min_votes"), VOTE_MIN)
+    cfg["models"] = [m for m in (cfg.get("models") or []) if isinstance(m, dict)]
+    return cfg
+
+
+def discover_visual_models(models_dir) -> list:
+    """Resolve the ONNX model paths to run for visual analysis, in priority:
+
+    1. Explicit ``visual_models.json`` entries (missing files are logged and
+       skipped).
+    2. Auto-discovery: every ``*.onnx`` in the models dir / bundle roots whose
+       name hints at an NSFW model (``nudenet``, ``nsfw``, ``nude``, ``yolo``,
+       ``explicit``, ``adult``) -- ``nudenet.onnx`` is always included.
+    3. Plain fallback to ``nudenet.onnx``.
+    """
+    cfg = load_visual_config(models_dir)
+    if cfg["models"]:
+        paths = []
+        for spec in cfg["models"]:
+            file = str(spec.get("file") or "").strip()
+            if not file:
+                continue
+            found = find_file(file, models_dir)
+            if found:
+                paths.append(found)
+            else:
+                _log(f"Visual model not found: {file} (skipped).")
+        if paths:
+            return paths
+        _log("visual_models.json listed no loadable models; auto-discovering.")
+
+    candidates, seen = [], set()
+    dirs = [models_dir] if models_dir else []
+    for root in _bundle_roots():
+        dirs += [root, os.path.join(root, "models"), os.path.join(root, "bin")]
+    for d in dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        try:
+            entries = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for fn in entries:
+            if not fn.lower().endswith(".onnx"):
+                continue
+            path = os.path.join(d, fn)
+            key = os.path.normcase(os.path.normpath(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            low = fn.lower()
+            if "nudenet" in low or any(p in low for p in VISUAL_AUTO_PATTERNS):
+                candidates.append(path)
+    # nudenet.onnx first, even when its name does not match a pattern.
+    legacy = find_file("nudenet.onnx", models_dir)
+    if legacy and os.path.normcase(os.path.normpath(legacy)) not in seen:
+        candidates.insert(0, legacy)
+    return candidates
+
+
+def resolve_visual_specs(models_dir, override_path=None) -> list:
+    """Return per-model load specs: [{path, threshold, labels}]. Deduplicated,
+    with the threshold/labels configured for each file (defaults otherwise)."""
+    cfg = load_visual_config(models_dir, override_path)
+    configured = {}
+    for spec in cfg.get("models") or []:
+        file = str(spec.get("file") or "").strip()
+        if not file:
+            continue
+        found = find_file(file, models_dir)
+        if found:
+            configured[os.path.normcase(os.path.normpath(found))] = spec
+    specs = []
+    for path in discover_visual_models(models_dir):
+        key = os.path.normcase(os.path.normpath(path))
+        spec = configured.get(key, {})
+        specs.append({
+            "path": path,
+            "threshold": _clean_float(spec.get("threshold"), VISUAL_THRESHOLD),
+            "labels": str(spec.get("labels") or "").strip() or None,
+        })
+    return specs
+
+
+def _frame_confirm(votes, cfg) -> tuple:
+    """Fuse per-model votes for a single frame.
+
+    ``votes`` is [(confidence, label), ...] -- one entry per active model, with
+    ``confidence == 0`` meaning that model did not flag the frame. Rule
+    (config key ``rule``):
+
+      * ``all``      -- every model must flag the frame
+      * ``any``      -- at least one model flags it
+      * ``majority`` -- more than half of the models flag it
+      * ``consensus`` (default) -- all models agree; *or* a majority flags it
+        and the strongest vote is at/above ``confirm_confidence``; *or* any
+        single vote is at/above ``hard_confidence`` (recovers scenes one model
+        under-detects without letting a weak 0.65-0.85 single vote through).
+
+    Returns ``(confirmed, confidence)``.
+    """
+    n = len(votes)
+    if n == 0:
+        return False, 0.0
+    flagged = [(c, l) for c, l in votes if c > 0.0]
+    if not flagged:
+        return False, 0.0
+    strongest = max(c for c, _ in flagged)
+    rule = str(cfg.get("rule") or DEFAULT_RULE).lower()
+    k = len(flagged)
+    if rule == "all":
+        return k == n, strongest
+    if rule == "any":
+        return True, strongest
+    if rule == "majority":
+        return k >= (n + 1) // 2, strongest
+    # consensus
+    if k == n:
+        return True, strongest
+    if (k >= (n + 1) // 2
+            and strongest >= float(cfg.get("confirm_confidence",
+                                            DEFAULT_CONFIRM_CONFIDENCE))):
+        return True, strongest
+    if strongest >= float(cfg.get("hard_confidence", DEFAULT_HARD_CONFIDENCE)):
+        return True, strongest
+    return False, strongest
+
+
+def _temporal_confirm(indices, window=VOTE_WINDOW, min_votes=VOTE_MIN) -> list:
+    """Drop isolated single-sample spikes from a confirmed-frame index list.
+
+    A confirmed frame is kept only when at least ``min_votes`` confirmed frames
+    (counting itself) fall inside ``[i - window, i + window]`` sample frames.
+    A real scene spans several samples and survives; a lone false positive is
+    removed. Indices are sample-frame numbers, so the window and min_votes are
+    in units of ``1 / FRAME_FPS`` seconds.
+    """
+    idx = set(indices)
+    kept = []
+    for i in sorted(idx):
+        count = sum(1 for j in range(i - window, i + window + 1) if j in idx)
+        if count >= min_votes:
+            kept.append(i)
+    return kept
+
+
+def _best_label(votes) -> str:
+    """Label of the strongest flagging model for a confirmed frame."""
+    positive = [(c, l) for c, l in votes if c > 0.0]
+    if not positive:
+        return ""
+    return max(positive, key=lambda t: t[0])[1]
+
+
 def run_visual_analysis(ffmpeg, video, tmpdir, models_dir, frames,
                         providers_req=None, threads=None,
-                        progress=None, progress_floor=0.42):
+                        progress=None, progress_floor=0.42,
+                        config_path=None):
     """
     Return a list of raw skip segments
     [(start_s, end_s, confidence, label)] for frames whose NSFW confidence
     exceeds VISUAL_THRESHOLD.
+
+    Every discoverable ONNX visual model runs over the sampled frames. With a
+    single model the behaviour is exactly the legacy one (per-frame threshold).
+    With 2+ models their per-frame votes are fused (see _frame_confirm) and
+    then smoothed across neighbouring samples (see _temporal_confirm) so an
+    isolated single-model flicker can never become a skip segment.
 
     ``progress(fraction)`` receives the *overall* completion fraction while the
     inference loop runs (starting at ``progress_floor``, ending at 95%), so the
     animation hand-off from frame extraction is seamless.
     """
     report = progress or _progress
-    onnx_path = find_file("nudenet.onnx", models_dir)
-    if not onnx_path:
-        _log("No nudenet.onnx model found; visual analysis skipped.")
+    specs = resolve_visual_specs(models_dir, config_path)
+    if not specs:
+        _log("No visual ONNX model found; visual analysis skipped.")
         return []
 
-    try:
-        session, labels, model_type = load_model(
-            onnx_path, models_dir,
-            providers_req=providers_req, threads=threads)
-    except Exception as exc:  # noqa: BLE001
-        _log(f"ONNX session load failed ({exc}); visual analysis skipped.")
-        return []
-
-    (out_h, out_w, nchw), _c = _input_spatial(session)
-    input_name = session.get_inputs()[0].name
-    safe_idx = _safe_indices(labels)
-
-    try:
-        decoder = lambda: _decode_pil(frames, out_w, out_h)
-        next(decoder())                     # verify Pillow works
-        source = decoder()
-    except Exception:  # noqa: BLE001
-        _log("Pillow unavailable; using ffmpeg raw frame pipe.")
-        source = _decode_raw(ffmpeg, video, out_w, out_h)
-
-    hits = []
-    total = max(1, len(frames))
-    for i, (arr, _path) in source:
-        feed = _make_input(arr, nchw)
-        if feed is None:
-            continue
+    models = []
+    for spec in specs:
+        name = os.path.basename(spec["path"])
         try:
-            outs = session.run(None, {input_name: feed})
+            session, labels, model_type = load_model(
+                spec["path"], models_dir,
+                providers_req=providers_req, threads=threads,
+                labels_file=spec["labels"])
         except Exception as exc:  # noqa: BLE001
-            _log(f"Frame {i} inference failed: {exc}")
+            _log(f"ONNX session load failed for {name} ({exc}); skipped.")
             continue
+        (out_h, out_w, nchw), _c = _input_spatial(session)
+        models.append({
+            "session": session,
+            "labels": labels,
+            "model_type": model_type,
+            "threshold": spec["threshold"],
+            "input_name": session.get_inputs()[0].name,
+            "out_h": out_h, "out_w": out_w, "nchw": nchw,
+            "name": name,
+        })
 
-        if model_type == "detector":
-            conf, label = _interpret_detector(outs, labels, VISUAL_THRESHOLD)
-        else:
-            conf, label = _interpret_classifier(
-                outs, labels, VISUAL_THRESHOLD, safe_idx)
+    if not models:
+        _log("No visual ONNX model could be loaded; visual analysis skipped.")
+        return []
 
-        if conf > VISUAL_THRESHOLD:
-            start = i / FRAME_FPS
-            end = (i + 1) / FRAME_FPS
-            hits.append((start, end, conf, label))
+    ensemble = len(models) > 1
+    cfg = load_visual_config(models_dir, config_path)
+    if ensemble:
+        _log("Visual ensemble: " + ", ".join(m["name"] for m in models) +
+             f" (rule={cfg['rule']}, confirm={cfg['confirm_confidence']}, "
+             f"hard={cfg['hard_confidence']}, window={cfg['vote_window']}, "
+             f"min_votes={cfg['min_votes']}).")
 
-        if i % 20 == 0:
-            report(progress_floor + (0.95 - progress_floor) * (i + 1) / total)
+    total = max(1, len(frames))
+    # vote_grid[m][i] = (confidence, label) for model m at sample frame i.
+    vote_grid = [[(0.0, "") for _ in range(total)] for _ in models]
+    processed = 0
+    for m, spec in enumerate(models):
+        # Re-decode frames at each model's own input size so models with
+        # different resolutions can run side by side.
+        try:
+            probe = _decode_pil(frames, spec["out_w"], spec["out_h"])
+            next(probe)
+            source = _decode_pil(frames, spec["out_w"], spec["out_h"])
+        except Exception:  # noqa: BLE001
+            _log(f"{spec['name']}: Pillow unavailable; using ffmpeg raw frame pipe.")
+            source = _decode_raw(ffmpeg, video, spec["out_w"], spec["out_h"])
+        safe_idx = _safe_indices(spec["labels"])
+        for i, (arr, _path) in source:
+            if i >= total:
+                break
+            feed = _make_input(arr, spec["nchw"])
+            if feed is None:
+                continue
+            try:
+                outs = spec["session"].run(None, {spec["input_name"]: feed})
+            except Exception as exc:  # noqa: BLE001
+                _log(f"{spec['name']} frame {i} inference failed: {exc}")
+                continue
+            if spec["model_type"] == "detector":
+                conf, label = _interpret_detector(outs, spec["labels"],
+                                                  spec["threshold"])
+            else:
+                conf, label = _interpret_classifier(
+                    outs, spec["labels"], spec["threshold"], safe_idx)
+            vote_grid[m][i] = (max(0.0, conf), label)
+            processed += 1
+            if processed % 20 == 0:
+                report(progress_floor + (0.95 - progress_floor)
+                       * min(1.0, processed / max(1, total * len(models))))
+    report(progress_floor + (0.95 - progress_floor)
+           * min(1.0, processed / max(1, total * len(models))))
 
+    if not ensemble:
+        hits = [
+            (i / FRAME_FPS, (i + 1) / FRAME_FPS, conf, label)
+            for i in range(total)
+            for conf, label in [vote_grid[0][i]]
+            if conf > 0.0
+        ]
+        _log(f"Visual: {len(hits)} flagged frames of {total}.")
+        return hits
+
+    # ---- ensemble: per-frame fusion + temporal confirmation ----------------
+    confirmed = []
+    for i in range(total):
+        votes = [vote_grid[m][i] for m in range(len(models))]
+        ok, conf = _frame_confirm(votes, cfg)
+        if ok:
+            confirmed.append((i, conf, _best_label(votes)))
+    kept = set(_temporal_confirm([i for i, _c, _l in confirmed],
+                                 window=cfg["vote_window"],
+                                 min_votes=cfg["min_votes"]))
+    hits = [
+        (i / FRAME_FPS, (i + 1) / FRAME_FPS, conf, label)
+        for i, conf, label in confirmed if i in kept
+    ]
     _log(f"Visual: {len(hits)} flagged frames of {total}.")
+    _log(f"Visual ensemble: {len(confirmed)} fused flag frames; "
+         f"{len(hits)} after temporal smoothing.")
     return hits
 
 
@@ -1228,6 +1531,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--threads", type=int, default=None,
                    help="worker thread count for ONNX inference and "
                         "whisper.cpp (default: auto)")
+    p.add_argument("--visual-models-config", metavar="JSON", default=None,
+                   help="explicit visual ensemble config path (default: "
+                        "<models-dir>/visual_models.json)")
     p.add_argument("--temp-dir", default=None,
                    help="directory for intermediate files (default: system temp)")
     p.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
@@ -1297,7 +1603,8 @@ def run_scan(args) -> int:
             skip_hits = run_visual_analysis(
                 ffmpeg, input_path, tmp, args.models_dir, frames,
                 providers_req=args.provider, threads=args.threads,
-                progress=_progress, progress_floor=0.52)
+                progress=_progress, progress_floor=0.52,
+                config_path=args.visual_models_config)
             _progress(0.95)
         else:
             _progress(0.95)
@@ -1315,6 +1622,11 @@ def run_scan(args) -> int:
                 "filter_nudity": True,
                 "filter_profanity": True,
                 "safety_buffer_ms": int(SAFETY_BUFFER_S * 1000),
+                "visual_models": [
+                    os.path.basename(s["path"])
+                    for s in resolve_visual_specs(args.models_dir,
+                                                  args.visual_models_config)
+                ],
             },
             "segments": segments,
         }

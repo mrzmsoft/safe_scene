@@ -81,5 +81,87 @@ void main() {
       expect(same, segment);
       expect(different, isNot(segment));
     });
+
+    test('enabled defaults to true and is kept out of JSON when true', () {
+      const s = FilterSegment(
+        id: 'seg_e',
+        start: Duration(seconds: 1),
+        end: Duration(seconds: 2),
+        action: FilterAction.skip,
+        category: 'x',
+        source: 'manual',
+      );
+      expect(s.enabled, isTrue);
+      expect(s.toJson().containsKey('enabled'), isFalse);
+    });
+
+    test('disabled state round-trips through JSON', () {
+      const s = FilterSegment(
+        id: 'seg_off',
+        start: Duration(seconds: 1),
+        end: Duration(seconds: 2),
+        action: FilterAction.skip,
+        category: 'x',
+        source: 'manual',
+        enabled: false,
+      );
+      expect(s.toJson()['enabled'], isFalse);
+      final restored = FilterSegment.fromJson(s.toJson());
+      expect(restored.enabled, isFalse);
+      // Absent key still restores to enabled.
+      final json = s.toJson()..remove('enabled');
+      expect(FilterSegment.fromJson(json).enabled, isTrue);
+    });
+
+    test('copyWith replaces only the requested fields', () {
+      final updated = segment.copyWith(
+        end: const Duration(seconds: 25),
+        category: 'updated',
+        enabled: false,
+      );
+      expect(updated.id, segment.id);
+      expect(updated.start, segment.start);
+      expect(updated.end, const Duration(seconds: 25));
+      expect(updated.action, segment.action);
+      expect(updated.category, 'updated');
+      expect(updated.source, segment.source);
+      expect(updated.confidence, segment.confidence);
+      expect(updated.enabled, isFalse);
+    });
+
+    test('overlapsWith detects intersection only', () {
+      const a = FilterSegment(
+        start: Duration(seconds: 10),
+        end: Duration(seconds: 20),
+        action: FilterAction.mute,
+        category: 'p',
+        source: 'manual',
+      );
+      // Touching at the boundary is not an overlap (half-open windows).
+      const touching = FilterSegment(
+        start: Duration(seconds: 20),
+        end: Duration(seconds: 30),
+        action: FilterAction.mute,
+        category: 'p',
+        source: 'manual',
+      );
+      const inside = FilterSegment(
+        start: Duration(seconds: 12),
+        end: Duration(seconds: 15),
+        action: FilterAction.skip,
+        category: 'n',
+        source: 'manual',
+      );
+      const separate = FilterSegment(
+        start: Duration(seconds: 30),
+        end: Duration(seconds: 40),
+        action: FilterAction.mute,
+        category: 'p',
+        source: 'manual',
+      );
+      expect(a.overlapsWith(touching), isFalse);
+      expect(a.overlapsWith(inside), isTrue);
+      expect(a.overlapsWith(separate), isFalse);
+    });
   });
 }

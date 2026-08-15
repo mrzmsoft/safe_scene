@@ -66,6 +66,18 @@ Copy-Item dist\scanner_engine.exe assets\bin\
 ```
 The `whisper-cli.exe` comes from the official [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases) (`whisper-bin-x64.zip`).
 
+### Visual ensemble (reduce false alerts & missed scenes)
+
+The visual detector is **model-agnostic**: the scanner auto-detects any ONNX model you drop next to `nudenet.onnx` as either a YOLO-style detector or a softmax classifier. With **two or more** models present, the engine **fuses their per-frame votes** and **smooths them across neighbouring samples**, which removes most single-model false alerts (like a "SEXY" swimwear/romance frame) while a high-confidence (≥ 0.95) second vote recovers scenes one model under-detects.
+
+To enable it, place a second offline model (e.g. a YOLOv8-NSFW ONNX export) into the models folder next to `nudenet.onnx`, then copy the bundled example into place:
+
+```powershell
+Copy-Item assets\models\visual_models.example.json assets\models\visual_models.json
+```
+
+The config sets a per-model `threshold` (and optional per-model `labels` file), the fusion `rule` (`consensus` default, or `all` / `any` / `majority`), the `confirm_confidence` / `hard_confidence` tiers, and the temporal `vote_window` / `min_votes` smoothing. Missing models are skipped, so a lone `nudenet.onnx` behaves exactly as before. Visual sampling is now **2.0 FPS** (was 1.5) to close the gaps that caused missed scenes.
+
 ### Installer (Inno Setup)
 ```powershell
 iscc.exe safe_scene_installer.iss   # → dist\SafeScene_Setup_v1.0.0.exe

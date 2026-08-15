@@ -77,27 +77,124 @@ class SafePlayerController {
   bool _isDisposed = false;
   bool get isDisposed => _isDisposed;
 
-  /// The enforced segments (read only).
+  /// The enforced segments (read only, sorted by start time).
   List<FilterSegment> get segments => List.unmodifiable(_segments);
 
-  /// Adds [segment] to the enforced rule set.
+  /// Stable per-segment identity, regardless of whether an explicit `id` is
+  /// present. Used so editing/deleting a rule is never ambiguous even when two
+  /// rules share the same `start`/`end`/`action`.
+  static String _identityOf(FilterSegment s) {
+    return s.id ??
+        '${s.start.inMilliseconds}:${s.end.inMilliseconds}:${s.action.label}';
+  }
+
+  int _indexOfId(String id) {
+    for (var i = 0; i < _segments.length; i++) {
+      if (_segments[i].id != null && _segments[i].id == id) return i;
+    }
+    return -1;
+  }
+
+  int _indexOfSegment(FilterSegment segment) {
+    final identity = _identityOf(segment);
+    for (var i = 0; i < _segments.length; i++) {
+      if (_identityOf(_segments[i]) == identity) return i;
+    }
+    return -1;
+  }
+
+  /// Keeps the enforced list ordered by start time (then end, then action).
+  void _sortSegments() {
+    _segments.sort((a, b) {
+      final c = a.start.compareTo(b.start);
+      if (c != 0) return c;
+      final d = a.end.compareTo(b.end);
+      if (d != 0) return d;
+      return a.action.index.compareTo(b.action.index);
+    });
+  }
+
+  String _newId() => 'manual_${DateTime.now().microsecondsSinceEpoch}';
+
+  /// Adds [segment] to the enforced rule set (kept sorted by start time).
   void addSegment(FilterSegment segment) {
-    _segments.add(segment);
+    final withId = (segment.id == null || segment.id!.isEmpty)
+        ? segment.copyWith(id: _newId())
+        : segment;
+    _segments.add(withId);
+    _sortSegments();
     _notifySegments();
+    _refreshState();
   }
 
   /// Removes the first segment equal to [segment] from the rule set.
   void removeSegment(FilterSegment segment) {
-    final index = _indexOf(segment);
-    if (index >= 0) _segments.removeAt(index);
+    final index = _indexOfSegment(segment);
+    if (index < 0) return;
+    final removed = _segments.removeAt(index);
+    _activeMutes.remove(removed);
+    _skipped.remove(removed);
     _notifySegments();
+    _refreshState();
+  }
+
+  /// Removes the segment carrying [id].
+  void removeSegmentById(String id) {
+    final index = _indexOfId(id);
+    if (index < 0) return;
+    final removed = _segments.removeAt(index);
+    _activeMutes.remove(removed);
+    _skipped.remove(removed);
+    _notifySegments();
+    _refreshState();
   }
 
   /// Replaces [old] with [updated] in the rule set. No-op if [old] is absent.
   void updateSegment(FilterSegment old, FilterSegment updated) {
-    final index = _indexOf(old);
-    if (index >= 0) _segments[index] = updated;
+    final index = _indexOfSegment(old);
+    if (index < 0) return;
+    _segments[index] = updated;
+    _sortSegments();
     _notifySegments();
+    _refreshState();
+  }
+
+  /// Replaces the segment carrying [oldId] with [updated].
+  void updateSegmentById(String oldId, FilterSegment updated) {
+    final index = _indexOfId(oldId);
+    if (index < 0) return;
+    _segments[index] = updated;
+    _sortSegments();
+    _notifySegments();
+    _refreshState();
+  }
+
+  /// Sets the enabled flag of the segment carrying [id] (no-op when absent).
+  void setSegmentEnabled(String id, bool enabled) {
+    final index = _indexOfId(id);
+    if (index < 0) return;
+    final segment = _segments[index];
+    _segments[index] = segment.copyWith(enabled: enabled);
+    if (!enabled) {
+      // A disabled skip/mute must be allowed to fire again once re-enabled.
+      _skipped.remove(segment);
+      _activeMutes.remove(segment);
+      if (_activeMutes.isEmpty && _restoreVolume != 100.0) {
+        player.setVolume(_restoreVolume);
+      }
+    }
+    _notifySegments();
+    _refreshState();
+  }
+
+  /// Inserts an independent copy of [segment] (new id, kept as `manual`).
+  FilterSegment duplicateSegment(FilterSegment segment) {
+    final copy = segment.copyWith(
+      id: _newId(),
+      source: 'manual',
+    );
+    addSegment(copy);
+    return copy;
   }
 
   /// Clears all segments and replaces them with [segments].
@@ -105,14 +202,12 @@ class SafePlayerController {
     _segments
       ..clear()
       ..addAll(segments);
+    _sortSegments();
+    _skipped.clear();
+    _activeMutes.clear();
+    if (_activeMutes.isEmpty) player.setVolume(_restoreVolume);
     _notifySegments();
-  }
-
-  int _indexOf(FilterSegment segment) {
-    for (var i = 0; i < _segments.length; i++) {
-      if (_segments[i] == segment) return i;
-    }
-    return -1;
+    _refreshState();
   }
 
   void _notifySegments() {
@@ -146,6 +241,7 @@ class SafePlayerController {
     FilterSegment? active;
 
     for (final segment in _segments) {
+      if (!segment.enabled) continue;
       final inside = segment.contains(position);
 
       switch (segment.action) {
@@ -218,6 +314,42 @@ class SafePlayerController {
       _activeMutes.clear();
       player.setVolume(_restoreVolume);
     }
+  }
+
+  /// Re-applies the current playback position against the rules *without*
+  /// issuing any re-seeks. Called after every editor mutation so that a rule
+  /// that was just disabled — or a mute whose window just moved — takes effect
+  /// immediately, instead of waiting for the next position tick.
+  void _refreshState() {
+    final position = player.state.position;
+
+    // (Re)start any mute segment that now contains the position.
+    for (final segment in _segments) {
+      if (!segment.enabled) continue;
+      if (segment.action == FilterAction.mute && segment.contains(position)) {
+        _handleMute(segment);
+      }
+    }
+
+    // Release mutes that are no longer applicable (disabled, removed or left).
+    for (final muted in List<FilterSegment>.of(_activeMutes)) {
+      if (!_segments.contains(muted) ||
+          !muted.enabled ||
+          !muted.contains(position)) {
+        _releaseMute(muted);
+      }
+    }
+
+    // Recompute the active badge exactly like [_onPosition] (first rule, in
+    // sorted order, that contains the position).
+    FilterSegment? active;
+    for (final segment in _segments) {
+      if (!segment.enabled) continue;
+      if (segment.contains(position)) {
+        active ??= segment;
+      }
+    }
+    currentSegment.value = active;
   }
 
   /// Flips [isFading] on, then schedules it back off shortly after.
