@@ -215,6 +215,13 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
     });
   }
 
+  Future<void> _seekRelative(Duration delta) {
+    var target = _position + delta;
+    if (target < Duration.zero) target = Duration.zero;
+    if (_duration > Duration.zero && target > _duration) target = _duration;
+    return widget.controller.seek(target);
+  }
+
   // ---- Keyboard shortcuts -------------------------------------------------
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
@@ -369,33 +376,35 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
   }
 
   Widget _buildControls(BuildContext context) {
-    return Column(
+    return Stack(
       children: [
-        // Top gradient bar: back, title, active-filter badge, editor, fullscreen.
-        _TopBar(
-          title: widget.title ?? 'Safe Scene',
-          segment: widget.controller.currentSegment.value,
-          fullscreen: _fullscreen,
-          editorOpen: _editorOpen,
-          onBack: () => Navigator.of(context).maybePop(),
-          onEdit: _openEditor,
-          onFullscreen: _toggleFullscreen,
+        Align(
+          alignment: Alignment.topCenter,
+          child: _TopBar(
+            title: widget.title ?? 'Safe Scene',
+            segment: widget.controller.currentSegment.value,
+            fullscreen: _fullscreen,
+            editorOpen: _editorOpen,
+            onBack: () => Navigator.of(context).maybePop(),
+            onEdit: _openEditor,
+            onFullscreen: _toggleFullscreen,
+          ),
         ),
-        const Spacer(),
-        // Center play / pause.
-        _PlayPauseButton(
-          playing: _playing,
-          onPressed: widget.controller.togglePlay,
-        ),
-        const Spacer(),
-        // Bottom bar: custom timeline seek bar + time + volume.
-        _BottomBar(
-          position: _position,
-          duration: _duration,
-          volume: _volume,
-          segments: widget.controller.segments,
-          onSeek: (d) => widget.controller.seek(d),
-          onVolume: (v) => widget.controller.setVolume(v),
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: _BottomBar(
+            playing: _playing,
+            position: _position,
+            duration: _duration,
+            volume: _volume,
+            segments: widget.controller.segments,
+            onPlayPause: widget.controller.togglePlay,
+            onSeek: (d) => widget.controller.seek(d),
+            onSeekRelative: _seekRelative,
+            onStop: widget.controller.stop,
+            onVolume: (v) => widget.controller.setVolume(v),
+            onFullscreen: _toggleFullscreen,
+          ),
         ),
       ],
     );
@@ -443,19 +452,34 @@ class _TopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.black87, Colors.transparent],
-        ),
+        color: Color(0xEE1B1B1B),
+        border: Border(bottom: BorderSide(color: Color(0xFF303030))),
       ),
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 24),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       child: Row(
         children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
+          _PotButton(
+            icon: Icons.arrow_back,
             tooltip: 'Back',
             onPressed: onBack,
+          ),
+          const SizedBox(width: 4),
+          const Icon(Icons.shield_outlined, color: Color(0xFF8DCAF8), size: 17),
+          const SizedBox(width: 6),
+          const Text(
+            'Safe Scene',
+            style: TextStyle(
+              color: Color(0xFFE5E5E5),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: SizedBox(
+              height: 16,
+              child: VerticalDivider(width: 1, color: Color(0xFF424242)),
+            ),
           ),
           Expanded(
             child: Text(
@@ -463,28 +487,22 @@ class _TopBar extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
+                color: Color(0xFFCFCFCF),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ),
           if (segment != null) _ActiveFilterBadge(segment: segment!),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: Icon(
-              editorOpen ? Icons.edit_off : Icons.edit,
-              color: editorOpen ? Colors.lightBlueAccent : Colors.white,
-            ),
+          const SizedBox(width: 6),
+          _PotButton(
+            icon: editorOpen ? Icons.edit_off : Icons.edit,
+            selected: editorOpen,
             tooltip: editorOpen ? 'Close Scene Editor (E)' : 'Scene Editor (E)',
             onPressed: onEdit,
           ),
-          const SizedBox(width: 4),
-          IconButton(
-            icon: Icon(
-              fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-              color: Colors.white,
-            ),
+          _PotButton(
+            icon: fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
             tooltip: fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen (F)',
             onPressed: onFullscreen,
           ),
@@ -517,22 +535,27 @@ class _ActiveFilterBadge extends StatelessWidget {
       FilterAction.blackout => Icons.visibility_off,
     };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      constraints: const BoxConstraints(maxWidth: 220),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.85),
-        borderRadius: BorderRadius.circular(12),
+        color: color.withValues(alpha: 0.22),
+        border: Border.all(color: color.withValues(alpha: 0.65)),
+        borderRadius: BorderRadius.circular(3),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: Colors.white),
-          const SizedBox(width: 6),
-          Text(
-            segment.category,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              segment.category,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFFE8E8E8),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
@@ -541,28 +564,48 @@ class _ActiveFilterBadge extends StatelessWidget {
   }
 }
 
-/// The centered play / pause control.
-class _PlayPauseButton extends StatelessWidget {
-  const _PlayPauseButton({required this.playing, required this.onPressed});
+class _PotButton extends StatelessWidget {
+  const _PotButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+    this.selected = false,
+    this.size = 30,
+    this.iconSize = 18,
+  });
 
-  final bool playing;
+  final IconData icon;
+  final String tooltip;
   final VoidCallback onPressed;
+  final bool selected;
+  final double size;
+  final double iconSize;
 
   @override
   Widget build(BuildContext context) {
-    return Center(
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 450),
       child: Material(
-        color: Colors.black54,
-        shape: const CircleBorder(),
+        color: selected ? const Color(0xFF2B5F7C) : Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(3),
+          side: BorderSide(
+            color: selected ? const Color(0xFF4DA3D9) : Colors.transparent,
+          ),
+        ),
         child: InkWell(
-          customBorder: const CircleBorder(),
+          borderRadius: BorderRadius.circular(3),
+          hoverColor: const Color(0xFF343434),
+          splashColor: const Color(0xFF454545),
           onTap: onPressed,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
+          child: SizedBox(
+            width: size,
+            height: size,
             child: Icon(
-              playing ? Icons.pause : Icons.play_arrow,
-              size: 56,
-              color: Colors.white,
+              icon,
+              size: iconSize,
+              color: selected ? Colors.white : const Color(0xFFE6E6E6),
             ),
           ),
         ),
@@ -571,80 +614,176 @@ class _PlayPauseButton extends StatelessWidget {
   }
 }
 
-/// The bottom gradient bar with the custom timeline seek bar, time labels and
-/// the volume control.
-class _BottomBar extends StatelessWidget {
-  const _BottomBar({
-    required this.position,
-    required this.duration,
-    required this.volume,
-    required this.segments,
-    required this.onSeek,
-    required this.onVolume,
-  });
+class _TimeChip extends StatelessWidget {
+  const _TimeChip({required this.position, required this.duration});
 
   final Duration position;
   final Duration duration;
-  final double volume;
-  final List<FilterSegment> segments;
-  final ValueChanged<Duration> onSeek;
-  final ValueChanged<double> onVolume;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.bottomCenter,
-          end: Alignment.topCenter,
-          colors: [Colors.black87, Colors.transparent],
+      height: 26,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111111),
+        border: Border.all(color: const Color(0xFF333333)),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(
+        '${formatTimestamp(position)} / ${formatTimestamp(duration)}',
+        style: const TextStyle(
+          color: Color(0xFFD8D8D8),
+          fontSize: 12,
+          fontFeatures: [FontFeature.tabularFigures()],
         ),
       ),
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Text(
-                formatTimestamp(position),
-                style: const TextStyle(color: Colors.white, fontSize: 12),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SafeSeekBarWidget(
-                  position: position,
-                  duration: duration,
-                  segments: segments,
-                  onSeek: onSeek,
-                  height: 44,
+    );
+  }
+}
+
+/// The bottom control deck with a PotPlayer-like compact desktop layout.
+class _BottomBar extends StatelessWidget {
+  const _BottomBar({
+    required this.playing,
+    required this.position,
+    required this.duration,
+    required this.volume,
+    required this.segments,
+    required this.onPlayPause,
+    required this.onSeek,
+    required this.onSeekRelative,
+    required this.onStop,
+    required this.onVolume,
+    required this.onFullscreen,
+  });
+
+  final bool playing;
+  final Duration position;
+  final Duration duration;
+  final double volume;
+  final List<FilterSegment> segments;
+  final VoidCallback onPlayPause;
+  final ValueChanged<Duration> onSeek;
+  final ValueChanged<Duration> onSeekRelative;
+  final VoidCallback onStop;
+  final ValueChanged<double> onVolume;
+  final VoidCallback onFullscreen;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xF21A1A1A),
+      child: Container(
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: Color(0xFF303030))),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black54,
+              offset: Offset(0, -2),
+              blurRadius: 8,
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.fromLTRB(10, 6, 10, 7),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SafeSeekBarWidget(
+              position: position,
+              duration: duration,
+              segments: segments,
+              onSeek: onSeek,
+              height: 26,
+              trackHeight: 5,
+            ),
+            const SizedBox(height: 5),
+            Row(
+              children: [
+                _PotButton(
+                  icon: Icons.skip_previous,
+                  tooltip: 'Back 10 seconds',
+                  onPressed: () => onSeekRelative(-VideoPlayerPage.seekStep),
+                  size: 28,
+                  iconSize: 18,
                 ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                formatTimestamp(duration),
-                style: const TextStyle(color: Colors.white, fontSize: 12),
-              ),
-            ],
-          ),
-          Row(
-            children: [
-              Icon(
-                volume == 0 ? Icons.volume_off : Icons.volume_up,
-                color: Colors.white,
-                size: 20,
-              ),
-              Expanded(
-                child: Slider(value: volume, max: 100, onChanged: onVolume),
-              ),
-              Text(
-                '${volume.round()}%',
-                style: const TextStyle(color: Colors.white, fontSize: 12),
-              ),
-            ],
-          ),
-        ],
+                _PotButton(
+                  icon: playing ? Icons.pause : Icons.play_arrow,
+                  tooltip: playing ? 'Pause (Space)' : 'Play (Space)',
+                  onPressed: onPlayPause,
+                  selected: true,
+                  size: 32,
+                  iconSize: 22,
+                ),
+                _PotButton(
+                  icon: Icons.stop,
+                  tooltip: 'Stop',
+                  onPressed: onStop,
+                  size: 28,
+                  iconSize: 17,
+                ),
+                _PotButton(
+                  icon: Icons.skip_next,
+                  tooltip: 'Forward 10 seconds',
+                  onPressed: () => onSeekRelative(VideoPlayerPage.seekStep),
+                  size: 28,
+                  iconSize: 18,
+                ),
+                const SizedBox(width: 8),
+                _TimeChip(position: position, duration: duration),
+                const Spacer(),
+                Icon(
+                  volume <= 0 ? Icons.volume_off : Icons.volume_up,
+                  color: const Color(0xFFD8D8D8),
+                  size: 18,
+                ),
+                SizedBox(
+                  width: 118,
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 3,
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 5,
+                      ),
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 10,
+                      ),
+                      activeTrackColor: const Color(0xFF66B7E8),
+                      inactiveTrackColor: const Color(0xFF4A4A4A),
+                      thumbColor: const Color(0xFFE7E7E7),
+                    ),
+                    child: Slider(
+                      value: volume.clamp(0.0, 100.0),
+                      max: 100,
+                      onChanged: onVolume,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 38,
+                  child: Text(
+                    '${volume.round()}%',
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      color: Color(0xFFCFCFCF),
+                      fontSize: 11,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                _PotButton(
+                  icon: Icons.fullscreen,
+                  tooltip: 'Fullscreen (F)',
+                  onPressed: onFullscreen,
+                  size: 28,
+                  iconSize: 18,
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
