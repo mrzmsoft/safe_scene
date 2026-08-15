@@ -44,9 +44,6 @@ dependencies:
   # Native file dialogs for opening media files.
   file_picker: ^10.1.5
 
-  # Encrypted local storage for the Master PIN & safety settings.
-  flutter_secure_storage: ^9.2.4
-
   # Desktop window fullscreen control (for the F / Esc shortcuts).
   window_manager: ^0.4.3
 

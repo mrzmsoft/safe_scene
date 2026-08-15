@@ -13,7 +13,6 @@ A 100% offline, privacy-first desktop media player built with Flutter (Windows) 
 |  - Video Rendering Engine (media_kit + libmpv)                          |
 |  - Filter Engine (JSON loader, real-time timestamp listener)            |
 |  - Manual Scene Editor (Hotkeys + Seekbar Markers)                      |
-|  - Master PIN & Family Safety Controls                                  |
 +------------------------------------+------------------------------------+
                                      | Standard I/O (JSON Streams)
                                      v
@@ -72,8 +71,7 @@ A 100% offline, privacy-first desktop media player built with Flutter (Windows) 
 - [x] Design sleek Scan Dialog with progress bar, estimated time remaining, and real-time category detection counters (`ScanDialogWidget` + `ScanProgress`).
 - [x] Auto-save and auto-load `.safe` files alongside media files with matching hashes (engine writes, `findExistingRule` loads by name/hash).
 
-### Phase 4: Interactive Scene Editor & Parent Controls (Days 15–18)
-- [x] Build Parent PIN authentication (encrypted local storage via `flutter_secure_storage`, PBKDF2-HMAC-SHA256 verifier).
+### Phase 4: Interactive Scene Editor & Timeline Overlay (Days 15–18)
 - [x] Develop Scene Inspector Timeline: visually display Red (Skip) and Yellow (Mute) markers over `media_kit` timeline (`SafeSeekBarWidget`).
 - [x] Build In-Player Marker Hotkeys (`[`/`]` mark start/end, `S` saves as Skip, `M` saves as Mute — active while the editor is open).
 - [x] Implement segment fine-tuning dialog (adjust start/end by $\pm 100\text{ms}$) — Edit Segment dialog now nudge start/end in 100 ms steps.
@@ -181,20 +179,17 @@ Write the Flutter service and UI to communicate with `scanner_engine.exe` for Sa
    - If found, load rules immediately; otherwise prompt: "Would you like to auto-scan this movie for Family Mode?".
 ```
 
-### Prompt 4: Parent Control, PIN Lock & Visual Timeline Overlay
+### Prompt 4: Visual Timeline Overlay & Scene Editor
 ```text
-Implement Parent Controls and Timeline Overlays for the Safe Scene Flutter app:
+Implement the timeline overlay and Scene Editor for the Safe Scene Flutter app:
 
-1. `SecurityService`:
-   - Store and verify a 4-digit Master PIN using flutter_secure_storage and bcrypt/crypto hashing.
-   - Require PIN verification before opening the Scene Editor, modifying filter sensitivities, or disabling Safe Mode.
-2. `SafeSeekBarWidget`:
+1. `SafeSeekBarWidget`:
    - Custom Flutter canvas timeline slider that replaces standard video slider.
    - Paint colored vertical notches/bands along the progress bar:
      - 🟥 Red bands for 'skip' segments.
      - 🟨 Yellow bands for 'mute' segments.
    - Tooltip on hover showing segment timestamp and category name.
-3. `SceneEditorDrawer`:
+2. `SceneEditorDrawer`:
    - Side panel showing an editable list of all flagged segments.
    - In-player hotkeys to mark start (`[`), end (`]`), and save new segment.
    - Buttons to test/preview flagged segments with a 3-second lead-in.

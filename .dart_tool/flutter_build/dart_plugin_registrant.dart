@@ -18,7 +18,6 @@ import 'package:file_picker/file_picker.dart' as file_picker;
 import 'package:path_provider_foundation/path_provider_foundation.dart' as path_provider_foundation;
 import 'package:wakelock_plus/wakelock_plus.dart' as wakelock_plus;
 import 'package:file_picker/file_picker.dart' as file_picker;
-import 'package:flutter_secure_storage_windows/flutter_secure_storage_windows.dart' as flutter_secure_storage_windows;
 import 'package:package_info_plus/package_info_plus.dart' as package_info_plus;
 import 'package:path_provider_windows/path_provider_windows.dart' as path_provider_windows;
 import 'package:wakelock_plus/wakelock_plus.dart' as wakelock_plus;
@@ -137,15 +136,6 @@ class _PluginRegistrant {
       } catch (err) {
         print(
           '`file_picker` threw an error: $err. '
-          'The app may not function as expected until you remove this plugin from pubspec.yaml'
-        );
-      }
-
-      try {
-        flutter_secure_storage_windows.FlutterSecureStorageWindows.registerWith();
-      } catch (err) {
-        print(
-          '`flutter_secure_storage_windows` threw an error: $err. '
           'The app may not function as expected until you remove this plugin from pubspec.yaml'
         );
       }

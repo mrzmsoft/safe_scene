@@ -78,7 +78,8 @@ DEFAULT_CHUNK = 1 << 20            # 1 MiB, for hashing
 AUDIO_EXTRACT_RTF = 2.0           # ffmpeg WAV extraction assumed to run >= this x realtime
 AUDIO_EXTRACT_BUDGET_MIN = 120.0  # seconds (absolute floor for short clips)
 FRAME_EXTRACT_BUDGET_MIN = 180.0  # seconds (absolute floor for frame extraction)
-WHISPER_MIN_RTF = 3.0             # whisper.cpp assumed to transcribe >= this x realtime
+WHISPER_MIN_RTF = 1.5             # whisper.cpp assumed to run at least this fast vs realtime;
+                                 # the budget is generous so long movies are NEVER cut short
 WHISPER_EST_RTF = 10.0            # optimistic throughput used for the live estimate
 WHISPER_STARTUP_S = 20.0          # model load / warm-up allowance in the estimate
 WHISPER_BUDGET_MIN = 120.0        # seconds
@@ -86,13 +87,30 @@ HEARTBEAT_S = 5.0                 # keep the UI alive even before first real pro
 
 # NudeNet classifier label order (used when labels.json is absent).
 CLASSIFIER_DEFAULT_LABELS = ["DRAWING", "HENTAI", "NEUTRAL", "PORN", "SEXY"]
-# NudeNet detector label order (used only for display; every class is unsafe).
+# NudeNet v3 detector class order (Ultralytics YOLOv8 export, 18 classes).
+# The model metadata carries the authoritative list; this array is the fallback
+# used when neither labels.json nor metadata is available.
 DETECTOR_DEFAULT_LABELS = [
-    "FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED", "EXPOSED_ANUS",
-    "EXPOSED_BREAST", "EXPOSED_BUTTOCKS", "EXPOSED_FEMALE_GENITALIA",
-    "EXPOSED_MALE_GENITALIA", "FEMALE_BREAST_EXPOSED", "MALE_BREAST_EXPOSED",
-    "ANUS_EXPOSED", "BUTTOCKS_EXPOSED", "FEMALE_GENITALIA_COVERED",
+    "FEMALE_GENITALIA_COVERED", "FACE_FEMALE", "BUTTOCKS_EXPOSED",
+    "FEMALE_BREAST_EXPOSED", "FEMALE_GENITALIA_EXPOSED", "MALE_BREAST_EXPOSED",
+    "ANUS_EXPOSED", "FEET_EXPOSED", "BELLY_COVERED", "FEET_COVERED",
+    "ARMPITS_COVERED", "ARMPITS_EXPOSED", "FACE_MALE", "BELLY_EXPOSED",
+    "MALE_GENITALIA_EXPOSED", "ANUS_COVERED", "FEMALE_BREAST_COVERED",
+    "BUTTOCKS_COVERED",
 ]
+
+
+def _is_explicit_label(label) -> bool:
+    """True only for detector classes that represent *explicit* content.
+
+    NudeNet v3 (and friends) mix non-explicit classes (faces, bellies, feet,
+    armpits) into the label set, so a frame is only flagged when an *exposed
+    intimate area* (genitals / anus / breast / buttocks) was detected.
+    """
+    u = str(label or "").upper()
+    if "EXPOSED" not in u:
+        return False
+    return any(part in u for part in ("GENITAL", "ANUS", "BREAST", "BUTTOCKS"))
 
 # Default profanity dictionary (offline).  Overridable via profanity.txt in the
 # models directory (one token per line, ``#`` starts a comment).
@@ -757,7 +775,7 @@ def load_model(onnx_path: str, models_dir: str | None,
     _log("ONNX active providers: " + ", ".join(active)
          + (f"; threads={threads}" if threads else "; threads=auto"))
     model_type = _classify_model(session)
-    labels = _load_labels(models_dir, model_type)
+    labels = _load_labels(models_dir, model_type, session)
     return session, labels, model_type
 
 
@@ -801,7 +819,11 @@ def resolve_providers(requested: str | None) -> list:
     return providers
 
 
-def _load_labels(models_dir: str | None, model_type: str) -> list:
+def _load_labels(models_dir: str | None, model_type: str,
+                 session=None) -> list:
+    """Resolve the class-name list, preferring (in order) a custom
+    ``labels.json``, the ONNX graph metadata ``names`` map (Ultralytics
+    exports embed it), then the built-in defaults."""
     custom = find_file("labels.json", models_dir)
     if custom:
         try:
@@ -813,19 +835,36 @@ def _load_labels(models_dir: str | None, model_type: str) -> list:
                 return raw["labels"]
         except (OSError, ValueError) as exc:  # noqa: BLE001
             _log(f"Could not read {custom}: {exc}")
+    if model_type == "detector" and session is not None:
+        try:
+            names = (session.get_modelmeta().custom_metadata_map or {}).get("names")
+            if names:
+                import ast
+                raw = ast.literal_eval(names)
+                if isinstance(raw, dict) and raw:
+                    ordered = []
+                    for key in sorted(int(k) for k in raw.keys()):
+                        value = str(raw[str(key)]) if str(key) in raw else str(raw[key])
+                        ordered.append(value)
+                    if ordered:
+                        return ordered
+        except Exception:  # noqa: BLE001
+            pass
     if model_type == "detector":
         return list(DETECTOR_DEFAULT_LABELS)
     return list(CLASSIFIER_DEFAULT_LABELS)
 
 
 def _classify_model(session) -> str:
-    """Heuristic: detector graphs emit 2 outputs (boxes + [N,25200,C] scores)."""
+    """Heuristic: detector graphs emit a large 3-D grid output such as
+    Ultralytics' ``[1, 22, 2100]`` or classic NudeNet's ``[1, 25200, 10]``
+    while classifiers expose a small vector (``[1, 5]``). Returns
+    ``\"detector\"`` only when a wide grid axis (>= 1000 anchors) exists."""
     outputs = session.get_outputs()
     for out in outputs:
         shape = out.shape
-        if len(shape) == 3 and len(shape) >= 2 and shape[-2] == 25200:
-            return "detector"
-        if len(shape) == 3 and shape[0] == 25200:
+        positive = [int(d) for d in shape if isinstance(d, int) and d and d > 0]
+        if len(positive) >= 3 and max(positive) >= 1000:
             return "detector"
     return "classifier"
 
@@ -900,25 +939,71 @@ def _make_input(arr, nchw: bool) -> Any:
 
 
 def _interpret_detector(outs, labels, threshold):
-    """Best-effort detector parse. Returns (conf, label) or (0.0, '')."""
-    best = None
+    """YOLO-style detector parse for NudeNet (returns conf, label).
+
+    Handles both common ONNX layouts for the frame's detection tensor:
+      * candidates-major ``(anchors, 4 + C)``  -- classic ``[1, 25200, 10]``
+      * channels-major   ``(4 + C, anchors)``  -- Ultralytics ``[1, 22, 2100]``
+    Columns/rows 0..3 are box coordinates and 4.. are class scores (already
+    sigmoided when the graph fused it). Only *explicit* classes count; the
+    strongest detection at or above ``threshold`` wins.
+
+    Returns ``(confidence, label)`` or ``(0.0, \"\")`` when nothing qualifies.
+    """
+    best = None  # (anchors x (4+C) float32, n_anchors, n_channels)
     for o in outs:
-        a = None
         try:
             a = np.asarray(o, dtype=np.float32)
         except Exception:  # noqa: BLE001
             continue
-        if a.ndim >= 2 and 25200 in a.shape:
-            if best is None or a.shape[-1] > best[1]:
-                best = (a, a.shape[-1])
+        if a.ndim == 3:
+            a = a[0]                    # drop the batch dimension
+        if a.ndim != 2:
+            continue
+        d0, d1 = a.shape
+        if d1 <= 64 and d1 < d0:
+            arr = a                     # candidates-major: [anchors, 4+C]
+            n_anchors, n_channels = d0, d1
+        elif d0 <= 64 and d0 < d1:
+            arr = a.T                   # channels-major: [4+C, anchors]
+            n_anchors, n_channels = d1, d0
+        else:
+            continue
+        if n_channels < 5:
+            continue
+        if best is None or n_anchors > best[1]:
+            best = (arr, n_anchors, n_channels)
     if best is None:
         return 0.0, ""
-    arr = best[0].reshape(-1, best[1])
-    flat = arr.max(axis=1)                 # high score per anchor
-    anchor = int(flat.argmax())
-    conf = float(flat[anchor])
-    label_idx = int(arr[anchor].argmax())
-    label = labels[label_idx] if label_idx < len(labels) else f"class_{label_idx}"
+
+    arr, n_anchors, n_channels = best
+    boxes = arr[:, :4]
+    scores = arr[:, 4:]
+    if scores.min() >= 0.0 and scores.max() <= 1.0:
+        probs = scores                 # graph already fused the sigmoid
+    else:
+        probs = 1.0 / (1.0 + np.exp(-np.clip(scores, -15.0, 15.0)))
+
+    explicit_cols = [
+        i for i in range(probs.shape[1])
+        if _is_explicit_label(labels[i] if i < len(labels) else f"class_{i}")
+    ]
+    if not explicit_cols:
+        return 0.0, ""
+
+    per_anchor = probs[:, explicit_cols].max(axis=1)
+    class_idx = probs[:, explicit_cols].argmax(axis=1)
+    # Drop anchors with degenerate boxes -- they can never be real detections.
+    if boxes[:, 2].max() > 0.0:
+        valid = (boxes[:, 2] > 0.0) & (boxes[:, 3] > 0.0)
+        per_anchor = np.where(valid, per_anchor, 0.0)
+
+    top = int(per_anchor.argmax())
+    conf = float(per_anchor[top])
+    if conf <= threshold:
+        return 0.0, ""
+    kind = explicit_cols[class_idx[top]]
+    label = labels[kind] if kind < len(labels) else f"class_{kind}"
     return conf, label
 
 

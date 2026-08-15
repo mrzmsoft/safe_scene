@@ -13,7 +13,6 @@ A **100% offline, privacy-first** desktop video player for Windows that automati
 - **Auto-mute profanity** — whisper.cpp (`ggml-base.bin`) transcribes the audio and a local dictionary mutes flagged words.
 - **Auto-load filter rules** — a `<name>.safe.json` next to your video is loaded by filename or content hash; otherwise you are offered a one-click scan.
 - **Scene Editor** — review/edit/delete flagged segments, mark your own with `[`/`]`, save as Skip (`S`) or Mute (`M`), fine-tune start/end by ±100 ms, and preview with a 3 s lead-in.
-- **Parental controls** — a Master PIN (PBKDF2-HMAC-SHA256, stored via `flutter_secure_storage`) gates the editor and safety settings.
 - **Visual timeline** — red (skip) / yellow (mute) / purple (blackout) bands with hover tooltips on the seek bar.
 
 ## Architecture
@@ -22,7 +21,7 @@ A **100% offline, privacy-first** desktop video player for Windows that automati
 ┌───────────────────────────── Flutter Windows frontend ─────────────────────────────┐
 │  UI & file pickers (file_picker) · playback (media_kit + libmpv)                  │
 │  Filter engine (JSON rules → real-time skip/mute listener)                        │
-│  Scene editor (hotkeys + seekbar markers) · Master PIN & family controls          │
+│  Scene editor (hotkeys + seekbar markers)                                │
 └───────────────────────────────────┬───────────────────────────────────────────────┘
                                     │  stdout JSON (PROGRESS: / RESULT:)
 ┌───────────────────────────────────▼───────────────────────────────────────────────┐
@@ -43,7 +42,6 @@ A **100% offline, privacy-first** desktop video player for Windows that automati
 | Visual AI | ONNX Runtime (inside `scanner_engine.exe`) + `nudenet.onnx` (~12 MB) |
 | Media processing | Bundled `ffmpeg.exe` / `ffprobe.exe` / `ffplay.exe` |
 | Storage | Human-readable JSON (`*.safe.json`) — see ROADMAP §3 |
-| Security | `flutter_secure_storage` + PBKDF2-HMAC-SHA256 |
 
 ## Getting started
 
@@ -79,7 +77,7 @@ iscc.exe safe_scene_installer.iss   # → dist\SafeScene_Setup_v1.0.0.exe
 2. **Open Video File** to play any movie — a matching `<name>.safe.json` loads its rules instantly; otherwise a *"Auto-scan for Family Mode?"* prompt appears.
 3. Or use the always-visible **Scan & Protect a Movie** button to scan any video you choose — a progress dialog streams live counters ("Visual Scenes Flagged", "Profanities Flagged") and the movie plays with the resulting rules when done.
 4. The player automatically skips/mutes flagged windows (with a fade mask on skips).
-5. Press `E` (PIN required) to open the Scene Editor: edit/delete segments, mark your own with `[`/`]` and save with `S`/`M`, fine-tune ±100 ms, preview.
+5. Press `E` to open the Scene Editor: edit/delete segments, mark your own with `[`/`]` and save with `S`/`M`, fine-tune ±100 ms, preview.
 
 ### Keyboard shortcuts
 
@@ -88,7 +86,7 @@ iscc.exe safe_scene_installer.iss   # → dist\SafeScene_Setup_v1.0.0.exe
 | `Space` | Play / pause |
 | `←` / `→` | Seek ±10 s |
 | `F` / `Esc` | Toggle fullscreen / exit |
-| `E` | Open / close Scene Editor (PIN protected) |
+| `E` | Open / close Scene Editor |
 | `[` / `]` | Mark segment start / end (editor open) |
 | `S` / `M` | Save marked range as Skip / Mute (editor open) |
 
@@ -102,11 +100,9 @@ lib/
   screens/home_page.dart                    # file picker + auto-load/scan flow
   screens/video_player_page.dart            # player, overlays, hotkeys
   services/scanner_service.dart             # Process.start + PROGRESS:/RESULT: IPC
-  services/security_service.dart            # Master PIN (PBKDF2)
   widgets/safe_seek_bar.dart                # timeline with segment bands
   widgets/scan_dialog.dart                  # scan progress dialog
   widgets/scene_editor_drawer.dart          # segment list + fine-tune dialog
-  widgets/pin_dialog.dart                   # numeric PIN keypad
 assets/
   bin/    # ffmpeg, ffprobe, ffplay, scanner_engine.exe, whisper-cli.exe + DLLs
   models/ # ggml-base.bin, nudenet.onnx

@@ -8,7 +8,6 @@ import 'package:window_manager/window_manager.dart';
 
 import '../controllers/safe_player_controller.dart';
 import '../models/filter_segment.dart';
-import '../services/security_service.dart';
 import '../widgets/safe_seek_bar.dart';
 import '../widgets/scene_editor_drawer.dart';
 
@@ -23,7 +22,7 @@ import '../widgets/scene_editor_drawer.dart';
 /// * `←` / `→` – seek backwards / forwards by 10 seconds
 /// * `F` – toggle fullscreen
 /// * `Esc` – exit fullscreen
-/// * `E` – open the Scene Editor (PIN required)
+/// * `E` – open the Scene Editor
 /// * `[` / `]` – mark segment start / end inside the editor
 /// * `S` / `M` – save the marked range as a Skip / Mute segment
 class VideoPlayerPage extends StatefulWidget {
@@ -67,8 +66,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
   bool _controlsVisible = true;
   Timer? _hideControlsTimer;
 
-  // Scene editor / parent controls state.
-  final SecurityService _security = SecurityService();
+  // Scene editor state.
   bool _editorOpen = false;
   Duration? _markStart;
   Duration? _markEnd;
@@ -172,17 +170,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
     }
   }
 
-  // ---- Scene Editor / Parent Controls ---------------------------------------
+  // ---- Scene Editor ----------------------------------------------
 
-  /// Opens the Scene Editor after verifying the Master PIN.
-  Future<void> _openEditor() async {
-    final ok = await _security.requirePin(
-      context,
-      message:
-          'Enter your Master PIN to open the Scene Editor. The editor '
-          'lets you view, add and edit the segments being filtered.',
-    );
-    if (ok && mounted) setState(() => _editorOpen = true);
+  /// Opens the Scene Editor.
+  void _openEditor() {
+    if (mounted) setState(() => _editorOpen = true);
   }
 
   void _closeEditor() {
@@ -384,7 +376,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
                     ),
                   ),
 
-                  // Scene Editor side panel (PIN-gated).
+                  // Scene Editor side panel.
                   if (_editorOpen) ...[
                     // Scrim behind the drawer.
                     Positioned.fill(
