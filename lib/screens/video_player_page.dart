@@ -8,6 +8,9 @@ import 'package:window_manager/window_manager.dart';
 
 import '../controllers/safe_player_controller.dart';
 import '../models/filter_segment.dart';
+import '../services/security_service.dart';
+import '../widgets/safe_seek_bar.dart';
+import '../widgets/scene_editor_drawer.dart';
 
 /// A self-contained desktop video player screen.
 ///
@@ -20,6 +23,8 @@ import '../models/filter_segment.dart';
 /// * `←` / `→` – seek backwards / forwards by 10 seconds
 /// * `F` – toggle fullscreen
 /// * `Esc` – exit fullscreen
+/// * `E` – open the Scene Editor (PIN required)
+/// * `[` / `]` – mark segment start / end inside the editor
 class VideoPlayerPage extends StatefulWidget {
   const VideoPlayerPage({
     super.key,
@@ -60,6 +65,14 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
   bool _fullscreen = false;
   bool _controlsVisible = true;
   Timer? _hideControlsTimer;
+
+  // Scene editor / parent controls state.
+  final SecurityService _security = SecurityService();
+  bool _editorOpen = false;
+  Duration? _markStart;
+  Duration? _markEnd;
+
+  static const Duration _previewLeadIn = Duration(seconds: 3);
 
   @override
   void initState() {
@@ -158,6 +171,49 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
     }
   }
 
+  // ---- Scene Editor / Parent Controls ---------------------------------------
+
+  /// Opens the Scene Editor after verifying the Master PIN.
+  Future<void> _openEditor() async {
+    final ok = await _security.requirePin(
+      context,
+      message: 'Enter your Master PIN to open the Scene Editor. The editor '
+          'lets you view, add and edit the segments being filtered.',
+    );
+    if (ok && mounted) setState(() => _editorOpen = true);
+  }
+
+  void _closeEditor() {
+    if (mounted) setState(() => _editorOpen = false);
+  }
+
+  /// Marks the start (or end) of a new segment at the current position.
+  void _markSegment({required bool isStart}) {
+    setState(() {
+      if (isStart) {
+        _markStart = _position;
+      } else {
+        _markEnd = _position;
+      }
+    });
+  }
+
+  /// Seeks to `start - 3s` (never below zero) and starts playback.
+  void _previewSegment(FilterSegment segment) {
+    var target = segment.start - _previewLeadIn;
+    if (target < Duration.zero) target = Duration.zero;
+    widget.controller.seek(target);
+    widget.controller.play();
+    _pokeControls();
+  }
+
+  void _clearMarks() {
+    setState(() {
+      _markStart = null;
+      _markEnd = null;
+    });
+  }
+
   // ---- Keyboard shortcuts -------------------------------------------------
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
@@ -192,6 +248,25 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
     if (key == LogicalKeyboardKey.escape) {
       _exitFullscreen();
       return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.keyE) {
+      _editorOpen ? _closeEditor() : _openEditor();
+      return KeyEventResult.handled;
+    }
+
+    // Segment marking hotkeys (only active while the editor is open).
+    if (_editorOpen) {
+      if (key == LogicalKeyboardKey.bracketLeft) {
+        _markSegment(isStart: true);
+        _pokeControls();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.bracketRight) {
+        _markSegment(isStart: false);
+        _pokeControls();
+        return KeyEventResult.handled;
+      }
     }
 
     return KeyEventResult.ignored;
@@ -253,6 +328,31 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
                     child: _buildControls(context),
                   ),
                 ),
+
+                // Scene Editor side panel (PIN-gated).
+                if (_editorOpen) ...[
+                  // Scrim behind the drawer.
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: _closeEditor,
+                      child: const ColoredBox(color: Colors.black38),
+                    ),
+                  ),
+                  // Drawer itself.
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: SceneEditorDrawer(
+                      controller: widget.controller,
+                      markStart: _markStart,
+                      markEnd: _markEnd,
+                      onPreview: _previewSegment,
+                      onClose: _closeEditor,
+                      onClearMarks: _clearMarks,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -264,12 +364,14 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
   Widget _buildControls(BuildContext context) {
     return Column(
       children: [
-        // Top gradient bar: back, title, active-filter badge, fullscreen.
+        // Top gradient bar: back, title, active-filter badge, editor, fullscreen.
         _TopBar(
           title: widget.title ?? 'Safe Scene',
           segment: widget.controller.currentSegment.value,
           fullscreen: _fullscreen,
+          editorOpen: _editorOpen,
           onBack: () => Navigator.of(context).maybePop(),
+          onEdit: _openEditor,
           onFullscreen: _toggleFullscreen,
         ),
         const Spacer(),
@@ -279,11 +381,12 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
           onPressed: widget.controller.togglePlay,
         ),
         const Spacer(),
-        // Bottom bar: seek slider + time + volume.
+        // Bottom bar: custom timeline seek bar + time + volume.
         _BottomBar(
           position: _position,
           duration: _duration,
           volume: _volume,
+          segments: widget.controller.segments,
           onSeek: (d) => widget.controller.seek(d),
           onVolume: (v) => widget.controller.setVolume(v),
         ),
@@ -308,21 +411,25 @@ class _BufferingIndicator extends StatelessWidget {
   }
 }
 
-/// The top gradient overlay bar with back button, title, active filter badge
-/// and the fullscreen toggle.
+/// The top gradient overlay bar with back button, title, active filter badge,
+/// the Scene Editor toggle and the fullscreen toggle.
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.title,
     required this.segment,
     required this.fullscreen,
+    required this.editorOpen,
     required this.onBack,
+    required this.onEdit,
     required this.onFullscreen,
   });
 
   final String title;
   final FilterSegment? segment;
   final bool fullscreen;
+  final bool editorOpen;
   final VoidCallback onBack;
+  final VoidCallback onEdit;
   final VoidCallback onFullscreen;
 
   @override
@@ -357,6 +464,15 @@ class _TopBar extends StatelessWidget {
           ),
           if (segment != null) _ActiveFilterBadge(segment: segment!),
           const SizedBox(width: 8),
+          IconButton(
+            icon: Icon(
+              editorOpen ? Icons.edit_off : Icons.edit,
+              color: editorOpen ? Colors.lightBlueAccent : Colors.white,
+            ),
+            tooltip: editorOpen ? 'Close Scene Editor (E)' : 'Scene Editor (E)',
+            onPressed: onEdit,
+          ),
+          const SizedBox(width: 4),
           IconButton(
             icon: Icon(
               fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
@@ -448,12 +564,14 @@ class _PlayPauseButton extends StatelessWidget {
   }
 }
 
-/// The bottom gradient bar with seek slider, time labels and volume control.
+/// The bottom gradient bar with the custom timeline seek bar, time labels and
+/// the volume control.
 class _BottomBar extends StatelessWidget {
   const _BottomBar({
     required this.position,
     required this.duration,
     required this.volume,
+    required this.segments,
     required this.onSeek,
     required this.onVolume,
   });
@@ -461,15 +579,12 @@ class _BottomBar extends StatelessWidget {
   final Duration position;
   final Duration duration;
   final double volume;
+  final List<FilterSegment> segments;
   final ValueChanged<Duration> onSeek;
   final ValueChanged<double> onVolume;
 
   @override
   Widget build(BuildContext context) {
-    final totalMs = duration.inMilliseconds;
-    final max = totalMs > 0 ? totalMs.toDouble() : 1.0;
-    final value = position.inMilliseconds.toDouble().clamp(0.0, max);
-
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -483,26 +598,23 @@ class _BottomBar extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Text(
                 formatTimestamp(position),
                 style: const TextStyle(color: Colors.white, fontSize: 12),
               ),
+              const SizedBox(width: 8),
               Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape: const RoundSliderThumbShape(
-                      enabledThumbRadius: 7,
-                    ),
-                  ),
-                  child: Slider(
-                    value: value,
-                    max: max,
-                    onChanged: (v) => onSeek(Duration(milliseconds: v.round())),
-                  ),
+                child: SafeSeekBarWidget(
+                  position: position,
+                  duration: duration,
+                  segments: segments,
+                  onSeek: onSeek,
+                  height: 44,
                 ),
               ),
+              const SizedBox(width: 8),
               Text(
                 formatTimestamp(duration),
                 style: const TextStyle(color: Colors.white, fontSize: 12),

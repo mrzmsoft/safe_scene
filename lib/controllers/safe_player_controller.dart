@@ -20,8 +20,9 @@ class SafePlayerController {
     List<FilterSegment> segments = const [],
     void Function(FilterSegment segment)? onSkip,
   }) : player = Player(),
-       _segments = List.unmodifiable(segments),
+       _segments = List.of(segments),
        _onSkip = onSkip {
+    segmentsNotifier.value = List.unmodifiable(_segments);
     _positionSub = player.stream.position.listen(_onPosition);
 
     // If the current media is swapped or playback stops, make sure any active
@@ -37,8 +38,14 @@ class SafePlayerController {
   /// `package:media_kit_video` [VideoController] to it for rendering.
   final Player player;
 
-  /// The immutable set of rules being enforced.
+  /// The set of rules being enforced (mutable so the Scene Editor can edit
+  /// the list at runtime).
   final List<FilterSegment> _segments;
+
+  /// Emits the current (read only) segment list so the seek bar and the Scene
+  /// Editor drawer can rebuild whenever a segment is added / edited / deleted.
+  final ValueNotifier<List<FilterSegment>> segmentsNotifier =
+      ValueNotifier<List<FilterSegment>>(const []);
 
   /// Optional callback fired right after a skip occurs.
   final void Function(FilterSegment segment)? _onSkip;
@@ -70,7 +77,46 @@ class SafePlayerController {
   bool get isDisposed => _isDisposed;
 
   /// The enforced segments (read only).
-  List<FilterSegment> get segments => _segments;
+  List<FilterSegment> get segments => List.unmodifiable(_segments);
+
+  /// Adds [segment] to the enforced rule set.
+  void addSegment(FilterSegment segment) {
+    _segments.add(segment);
+    _notifySegments();
+  }
+
+  /// Removes the first segment equal to [segment] from the rule set.
+  void removeSegment(FilterSegment segment) {
+    final index = _indexOf(segment);
+    if (index >= 0) _segments.removeAt(index);
+    _notifySegments();
+  }
+
+  /// Replaces [old] with [updated] in the rule set. No-op if [old] is absent.
+  void updateSegment(FilterSegment old, FilterSegment updated) {
+    final index = _indexOf(old);
+    if (index >= 0) _segments[index] = updated;
+    _notifySegments();
+  }
+
+  /// Clears all segments and replaces them with [segments].
+  void replaceSegments(List<FilterSegment> segments) {
+    _segments
+      ..clear()
+      ..addAll(segments);
+    _notifySegments();
+  }
+
+  int _indexOf(FilterSegment segment) {
+    for (var i = 0; i < _segments.length; i++) {
+      if (_segments[i] == segment) return i;
+    }
+    return -1;
+  }
+
+  void _notifySegments() {
+    segmentsNotifier.value = List.unmodifiable(_segments);
+  }
 
   /// Opens and loads [media] into the player. If [play] is true playback
   /// starts immediately.
@@ -192,6 +238,7 @@ class SafePlayerController {
     _activeMutes.clear();
     currentSegment.dispose();
     isFading.dispose();
+    segmentsNotifier.dispose();
     await player.dispose();
   }
 }
