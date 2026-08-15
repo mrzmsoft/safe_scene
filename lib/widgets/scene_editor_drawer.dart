@@ -28,55 +28,104 @@ class SceneEditorDrawer extends StatelessWidget {
     final categoryCtrl = TextEditingController(text: old.category);
     FilterAction? newAction = old.action;
     String? newCategory = old.category;
+    var newStart = old.start;
+    var newEnd = old.end;
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFF0F172A),
-          title: const Text('Edit Segment', style: TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<String>(
-                initialValue: newAction!.label,
-                dropdownColor: const Color(0xFF1E293B),
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'Action', border: OutlineInputBorder()),
-                items: FilterAction.values.map((a) => DropdownMenuItem(value: a.label, child: Text(a.label))).toList(),
-                onChanged: (v) => setDialogState(() => newAction = FilterAction.fromLabel(v!)),
+        builder: (ctx, setDialogState) {
+          // Fine-tune start/end by +/-100 ms, keeping a valid half-open window.
+          void nudgeStart(int ms) {
+            setDialogState(() {
+              final next = newStart + Duration(milliseconds: ms);
+              if (next.isNegative || next >= newEnd) return;
+              newStart = next;
+            });
+          }
+
+          void nudgeEnd(int ms) {
+            setDialogState(() {
+              final next = newEnd + Duration(milliseconds: ms);
+              if (next <= newStart) return;
+              newEnd = next;
+            });
+          }
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF0F172A),
+            title: const Text(
+              'Edit Segment',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: newAction!.label,
+                  dropdownColor: const Color(0xFF1E293B),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Action',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: FilterAction.values
+                      .map(
+                        (a) => DropdownMenuItem(
+                          value: a.label,
+                          child: Text(a.label),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) =>
+                      setDialogState(() => newAction = FilterAction.fromLabel(v!)),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: categoryCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Category',
+                    border: OutlineInputBorder(),
+                  ),
+                  style: const TextStyle(color: Colors.white),
+                  onChanged: (v) => newCategory = v,
+                ),
+                const SizedBox(height: 16),
+                _FineTuneRow(
+                  label: 'Start',
+                  value: newStart,
+                  onNudge: nudgeStart,
+                ),
+                const SizedBox(height: 4),
+                _FineTuneRow(label: 'End', value: newEnd, onNudge: nudgeEnd),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Cancel'),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: categoryCtrl,
-                decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder()),
-                style: const TextStyle(color: Colors.white),
-                onChanged: (v) => newCategory = v,
+              FilledButton(
+                onPressed: () {
+                  controller.updateSegment(
+                    old,
+                    FilterSegment(
+                      id: old.id,
+                      start: newStart,
+                      end: newEnd,
+                      action: newAction!,
+                      category: newCategory ?? old.category,
+                      source: old.source,
+                      confidence: old.confidence,
+                    ),
+                  );
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('Save'),
               ),
             ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () {
-                controller.updateSegment(
-                  old,
-                  FilterSegment(
-                    id: old.id,
-                    start: old.start,
-                    end: old.end,
-                    action: newAction!,
-                    category: newCategory ?? old.category,
-                    source: old.source,
-                    confidence: old.confidence,
-                  ),
-                );
-                Navigator.of(ctx).pop();
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -384,4 +433,67 @@ String _format(Duration d) {
   final s = d.inSeconds.remainder(60);
   if (h > 0) return '$h:${two(m)}:${two(s)}';
   return '${two(m)}:${two(s)}';
+}
+
+/// A labelled start/end row with +/-100 ms fine-tune buttons.
+class _FineTuneRow extends StatelessWidget {
+  const _FineTuneRow({
+    required this.label,
+    required this.value,
+    required this.onNudge,
+  });
+
+  final String label;
+  final Duration value;
+  final void Function(int deltaMs) onNudge;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 44,
+          child: Text(
+            label,
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            _formatMs(value),
+            style: const TextStyle(color: Colors.white, fontSize: 13),
+          ),
+        ),
+        IconButton(
+          icon: const Icon(
+            Icons.remove_circle_outline,
+            color: Colors.white54,
+            size: 20,
+          ),
+          tooltip: '$label \u2212100ms',
+          onPressed: () => onNudge(-100),
+        ),
+        IconButton(
+          icon: const Icon(
+            Icons.add_circle_outline,
+            color: Colors.white54,
+            size: 20,
+          ),
+          tooltip: '$label +100ms',
+          onPressed: () => onNudge(100),
+        ),
+      ],
+    );
+  }
+}
+
+String _formatMs(Duration d) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  String three(int n) => n.toString().padLeft(3, '0');
+  final h = d.inHours;
+  final m = d.inMinutes.remainder(60);
+  final s = d.inSeconds.remainder(60);
+  final ms = d.inMilliseconds.remainder(1000);
+  if (h > 0) return '$h:${two(m)}:${two(s)}.${three(ms)}';
+  return '${two(m)}:${two(s)}.${three(ms)}';
 }

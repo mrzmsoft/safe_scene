@@ -1,112 +1,125 @@
-+-------------------------------------------------------------------------+
-|                      FLUTTER WINDOWS FRONTEND                           |
-|  - UI State & File Pickers (file_picker)                                |
-|  - Video Rendering Engine (media_kit + libmpv)                          |
-|  - Filter Engine (JSON loader, real-time timestamp listener)            |
-|  - Manual Scene Editor (Hotkeys + Seekbar Markers)                      |
-|  - Master PIN & Family Safety Controls                                  |
-+------------------------------------+------------------------------------+
-| Standard I/O (JSON Streams)
-v
-+-------------------------------------------------------------------------+
-|                LOCAL SCANNER SIDECAR (C++ / Python CLI)                 |
-|                                                                         |
-|  [ Input Video (.mp4/.mkv) ]                                            |
-|        |                                                                |
-|        +---> Audio Extraction (FFmpeg CLI)                              |
-|        |           |                                                    |
-|        |           v                                                    |
-|        |     Whisper.cpp (ggml-base.bin) ---> Word Timestamps           |
-|        |           |                                                    |
-|        |           v                                                    |
-|        |     Profanity Regex / Dictionary -> [ MUTE Segments ]          |
-|        |                                                                |
-|        +---> Keyframe Sampling (1.5 FPS via FFmpeg)                     |
-|                    |                                                    |
-|                    v                                                    |
-|              NudeNet / YOLO-NSFW (ONNX) ---> [ SKIP Segments ]          |
-|                                                                         |
-|  [ Output: movie_name.safe.json ]                                       |
-+-------------------------------------------------------------------------+
+# Safe Scene
 
+A **100% offline, privacy-first** desktop video player for Windows that automatically **skips 18+ scenes** and **mutes profanity** using local AI inference — nothing ever leaves your machine.
 
-### Core Technologies
-* **Frontend Framework:** Flutter Desktop (Windows target, Release mode).
-* **Video Playback Engine:** `media_kit`, `media_kit_video`, `media_kit_libs_windows_video` (native `libmpv` binding for zero-latency frame-accurate seeking).
-* **Audio AI Engine:** `whisper.cpp` (C++ static binary with AVX2/DirectML) running `ggml-base.bin` (~140MB).
-* **Visual AI Engine:** ONNX Runtime (`onnxruntime.dll` / C++ or standalone Python sidecar) running quantized `nudenet_320n.onnx` (~40MB).
-* **Media Processor:** Bundled static `ffmpeg.exe` for high-speed keyframe and audio extraction.
-* **Storage Format:** Local human-readable JSON schema (`*.safe` / `*.safe.json`).
+> **Status:** All five roadmap phases are implemented. See [ROADMAP.md](ROADMAP.md) for the engineering plan, implementation prompts, and the JSON data specification.
 
 ---
 
-## 2. Master Implementation Roadmap (Phases 1 - 5)
+## What it does
 
-### Phase 1: Foundation & Video Playback Engine (Days 1–4)
-- [x] Configure Flutter Windows desktop environment and verify C++ build tools.
-- [ ] Install and configure `media_kit` for Windows.
-- [ ] Build baseline player UI with native keyboard hotkeys (Space for Play/Pause, Left/Right for Seek, Esc for Fullscreen).
-- [ ] Implement data models (`FilterSegment`, `SafeMetadata`, `FilterAction`).
-- [ ] Build real-time playback position listener stream to trigger instant skip and volume mute.
+- Play any local video (`mp4`, `mkv`, `avi`, `mov`, …) with `media_kit` + `libmpv`.
+- **Auto-skip explicit scenes** — NudeNet ONNX inference on keyframes flags nudity and the player jumps past it with a fade mask.
+- **Auto-mute profanity** — whisper.cpp (`ggml-base.bin`) transcribes the audio and a local dictionary mutes flagged words.
+- **Auto-load filter rules** — a `<name>.safe.json` next to your video is loaded by filename or content hash; otherwise you are offered a one-click scan.
+- **Scene Editor** — review/edit/delete flagged segments, mark your own with `[`/`]`, save as Skip (`S`) or Mute (`M`), fine-tune start/end by ±100 ms, and preview with a 3 s lead-in.
+- **Parental controls** — a Master PIN (PBKDF2-HMAC-SHA256, stored via `flutter_secure_storage`) gates the editor and safety settings.
+- **Visual timeline** — red (skip) / yellow (mute) / purple (blackout) bands with hover tooltips on the seek bar.
 
-### Phase 2: Offline AI Scanner Engine (Sidecar) (Days 5–10)
-- [ ] Build standalone `scanner_engine.exe` (or C++/Python worker script).
-- [ ] Integrate FFmpeg audio extraction: 16kHz mono `.wav`.
-- [ ] Integrate `whisper.cpp` to produce word-level timestamps.
-- [ ] Implement profanity regex and swearword dictionary filter mapping.
-- [ ] Integrate FFmpeg keyframe/scene extraction sampled at 1.5 FPS.
-- [ ] Run batch inference through `nudenet.onnx` and merge contiguous detections into safe skip intervals ($[t_{start} - 0.75s, t_{end} + 0.75s]$).
-- [ ] Pipe structured stdout stream (`PROGRESS:<0.0-1.0>`, `RESULT:<json>`) back to Flutter.
+## Architecture
 
-### Phase 3: Flutter Scanner Integration & Progress UI (Days 11–14)
-- [ ] Implement `ScannerService` in Flutter using `dart:io Process.start`.
-- [ ] Design sleek Scan Dialog with progress bar, estimated time remaining, and real-time category detection counters.
-- [ ] Auto-save and auto-load `.safe` files alongside media files with matching hashes.
+```
+┌───────────────────────────── Flutter Windows frontend ─────────────────────────────┐
+│  UI & file pickers (file_picker) · playback (media_kit + libmpv)                  │
+│  Filter engine (JSON rules → real-time skip/mute listener)                        │
+│  Scene editor (hotkeys + seekbar markers) · Master PIN & family controls          │
+└───────────────────────────────────┬───────────────────────────────────────────────┘
+                                    │  stdout JSON (PROGRESS: / RESULT:)
+┌───────────────────────────────────▼───────────────────────────────────────────────┐
+│  Local scanner sidecar (scanner_engine.exe — PyInstaller bundle)                  │
+│  1. ffmpeg → 16 kHz WAV → whisper.cpp → word timestamps → profanity ⇒ MUTE        │
+│  2. ffmpeg → 1.5 FPS keyframes → NudeNet ONNX → explicit frames ⇒ SKIP            │
+│  Output: <video>.safe.json (750 ms buffer, 2.5 s merge window)                    │
+└───────────────────────────────────────────────────────────────────────────────────┘
+```
 
-### Phase 4: Interactive Scene Editor & Parent Controls (Days 15–18)
-- [ ] Build Parent PIN authentication (encrypted local storage via `flutter_secure_storage`).
-- [ ] Develop Scene Inspector Timeline: visually display Red (Skip) and Yellow (Mute) markers over `media_kit` timeline.
-- [ ] Build In-Player Marker Hotkeys (`[` for segment start, `]` for segment end, `S` for Skip, `M` for Mute).
-- [ ] Implement segment fine-tuning dialog (adjust start/end by $\pm 100\text{ms}$).
+### Tech stack
 
-### Phase 5: Production Packaging & Performance Tuning (Days 19–22)
-- [ ] Multi-thread CPU & DirectML GPU acceleration configuration.
-- [ ] Bundle static binaries (`ffmpeg.exe`, `scanner_engine.exe`, AI models) in `assets/bin/` and `assets/models/`.
-- [ ] Build standalone Windows installer using **Inno Setup**.
+| Layer | Technology |
+|---|---|
+| Frontend | Flutter (Windows desktop, Material 3 dark theme) |
+| Playback | `media_kit`, `media_kit_video`, `media_kit_libs_windows_video` (libmpv) |
+| Audio AI | `whisper.cpp` v1.9.2 (`whisper-cli.exe`) + `ggml-base.bin` (~148 MB) |
+| Visual AI | ONNX Runtime (inside `scanner_engine.exe`) + `nudenet.onnx` (~12 MB) |
+| Media processing | Bundled `ffmpeg.exe` / `ffprobe.exe` / `ffplay.exe` |
+| Storage | Human-readable JSON (`*.safe.json`) — see ROADMAP §3 |
+| Security | `flutter_secure_storage` + PBKDF2-HMAC-SHA256 |
 
----
+## Getting started
 
-## 3. Data Specification (`movie.safe.json`)
+### Prerequisites
+- Windows 10/11 (x64)
+- Flutter SDK (stable) with the Windows desktop toolchain (Visual Studio C++ workload)
 
-```json
-{
-  "version": "1.0",
-  "media_title": "Action_Movie_2026.mp4",
-  "media_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "duration_ms": 7200000,
-  "settings": {
-    "filter_nudity": true,
-    "filter_profanity": true,
-    "safety_buffer_ms": 750
-  },
-  "segments": [
-    {
-      "id": "seg_001",
-      "start_ms": 142000,
-      "end_ms": 147500,
-      "action": "skip",
-      "category": "explicit_nudity",
-      "confidence": 0.96,
-      "source": "ai_nudenet"
-    },
-    {
-      "id": "seg_002",
-      "start_ms": 210200,
-      "end_ms": 211100,
-      "action": "mute",
-      "category": "profanity",
-      "confidence": 1.0,
-      "source": "ai_whisper"
-    }
-  ]
-}
+### Build the Flutter app
+```powershell
+flutter pub get
+flutter run -d windows          # development
+flutter build windows --release # production
+```
+
+### Build the scanner engine (binaries are already bundled in `assets/bin`)
+```powershell
+pip install pyinstaller faster-whisper onnxruntime numpy pillow
+python -m PyInstaller --onefile --name scanner_engine `
+  --collect-all faster_whisper --hidden-import=onnxruntime --hidden-import=PIL `
+  scanner_engine.py
+Copy-Item dist\scanner_engine.exe assets\bin\
+```
+The `whisper-cli.exe` comes from the official [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases) (`whisper-bin-x64.zip`).
+
+### Installer (Inno Setup)
+```powershell
+iscc.exe safe_scene_installer.iss   # → dist\SafeScene_Setup_v1.0.0.exe
+```
+
+## Usage
+
+1. Launch **Safe Scene** and pick **Open Video File**.
+2. If a matching `<name>.safe.json` exists it loads instantly.
+3. Otherwise choose *Auto-scan for Family Mode* — a progress dialog streams live counters ("Visual Scenes Flagged", "Profanities Flagged").
+4. The player automatically skips/mutes flagged windows (with a fade mask on skips).
+5. Press `E` (PIN required) to open the Scene Editor: edit/delete segments, mark your own with `[`/`]` and save with `S`/`M`, fine-tune ±100 ms, preview.
+
+### Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| `Space` | Play / pause |
+| `←` / `→` | Seek ±10 s |
+| `F` / `Esc` | Toggle fullscreen / exit |
+| `E` | Open / close Scene Editor (PIN protected) |
+| `[` / `]` | Mark segment start / end (editor open) |
+| `S` / `M` | Save marked range as Skip / Mute (editor open) |
+
+## Project layout
+
+```
+lib/
+  controllers/safe_player_controller.dart   # rule enforcement (skip/mute/blackout)
+  models/filter_segment.dart                # FilterSegment + FilterAction
+  models/scan_progress.dart                 # ScanProgress / ScanResult
+  screens/home_page.dart                    # file picker + auto-load/scan flow
+  screens/video_player_page.dart            # player, overlays, hotkeys
+  services/scanner_service.dart             # Process.start + PROGRESS:/RESULT: IPC
+  services/security_service.dart            # Master PIN (PBKDF2)
+  widgets/safe_seek_bar.dart                # timeline with segment bands
+  widgets/scan_dialog.dart                  # scan progress dialog
+  widgets/scene_editor_drawer.dart          # segment list + fine-tune dialog
+  widgets/pin_dialog.dart                   # numeric PIN keypad
+assets/
+  bin/    # ffmpeg, ffprobe, ffplay, scanner_engine.exe, whisper-cli.exe + DLLs
+  models/ # ggml-base.bin, nudenet.onnx
+scanner_engine.py        # offline scanner sidecar (PyInstaller → scanner_engine.exe)
+safe_scene_installer.iss # Inno Setup installer script
+test/                    # Flutter unit/widget tests (25)
+```
+
+## Data specification
+
+Scan results follow the `movie.safe.json` schema (see [ROADMAP.md §3](ROADMAP.md) for the full example). Each `segment` carries `start_ms`, `end_ms`, `action` (`skip`/`mute`/`blackout`), `category`, `confidence`, and `source` (`ai_nudenet` / `ai_whisper` / `manual`).
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) — phase checklist, implementation prompts, and the JSON data specification.
+

@@ -21,7 +21,7 @@
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application.
 ; Do not use the same AppId value in installers of other applications.
-AppId={D3C7E9B1-2F4A-4C8E-9B5A-6E2F1A8C3D45}
+AppId={{D3C7E9B1-2F4A-4C8E-9B5A-6E2F1A8C3D45}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
@@ -65,12 +65,12 @@ Source: "{#FlutterReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recurse
 ; NOTE: assets\bin is optional; this section is only compiled once the
 ;       directory exists in the project root. Drop your binaries there and
 ;       they will be bundled automatically.
-#ifexist "assets\bin"
+#if DirExists("assets\bin")
 Source: "assets\bin\*"; DestDir: "{app}\assets\bin"; Flags: ignoreversion recursesubdirs
 #endif
 
 ; Offline AI models (nudenet.onnx, whisper models, ...)
-#ifexist "assets\models"
+#if DirExists("assets\models")
 Source: "assets\models\*"; DestDir: "{app}\assets\models"; Flags: ignoreversion recursesubdirs
 #endif
 

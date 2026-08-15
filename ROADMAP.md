@@ -59,9 +59,9 @@ A 100% offline, privacy-first desktop media player built with Flutter (Windows) 
 - [x] Build real-time playback position listener stream to trigger instant skip and volume mute (`SafePlayerController`).
 
 ### Phase 2: Offline AI Scanner Engine (Sidecar) (Days 5–10)
-- [x] Build standalone `scanner_engine.py` worker script — ⚠️ compiled `scanner_engine.exe` **not yet produced** (needs PyInstaller, Phase 5).
+- [x] Build standalone scanner engine (`scanner_engine.py` worker + PyInstaller-compiled `scanner_engine.exe` bundled in `assets/bin`).
 - [x] Integrate FFmpeg audio extraction: 16kHz mono `.wav`.
-- [x] Integrate whisper word-level timestamps (faster-whisper primary, whisper.cpp CLI fallback) — ⚠️ `whisper-cli.exe` **not yet bundled**.
+- [x] Integrate whisper word-level timestamps (whisper.cpp **v1.9.2 CLI** + `ggml-base.bin`; faster-whisper fallback for CTranslate2 models).
 - [x] Implement profanity regex and swearword dictionary filter mapping.
 - [x] Integrate FFmpeg keyframe/scene extraction sampled at 1.5 FPS.
 - [x] Run batch inference through `nudenet.onnx` and merge contiguous detections into safe skip intervals ($[t_{start} - 0.75s, t_{end} + 0.75s]$).
@@ -75,12 +75,12 @@ A 100% offline, privacy-first desktop media player built with Flutter (Windows) 
 ### Phase 4: Interactive Scene Editor & Parent Controls (Days 15–18)
 - [x] Build Parent PIN authentication (encrypted local storage via `flutter_secure_storage`, PBKDF2-HMAC-SHA256 verifier).
 - [x] Develop Scene Inspector Timeline: visually display Red (Skip) and Yellow (Mute) markers over `media_kit` timeline (`SafeSeekBarWidget`).
-- [x] Build In-Player Marker Hotkeys — ⚠️ `[`/`]` for segment start/end implemented (active while editor open); `S` (Skip) / `M` (Mute) keys **not yet mapped**.
-- [ ] Implement segment fine-tuning dialog (adjust start/end by $\pm 100\text{ms}$) — **not yet built**; editor currently edits action/category only.
+- [x] Build In-Player Marker Hotkeys (`[`/`]` mark start/end, `S` saves as Skip, `M` saves as Mute — active while the editor is open).
+- [x] Implement segment fine-tuning dialog (adjust start/end by $\pm 100\text{ms}$) — Edit Segment dialog now nudge start/end in 100 ms steps.
 
 ### Phase 5: Production Packaging & Performance Tuning (Days 19–22)
-- [ ] Multi-thread CPU & DirectML GPU acceleration configuration — **not done**; ONNX engine is pinned to `CPUExecutionProvider` with default threads.
-- [ ] Bundle static binaries (`ffmpeg.exe`, `scanner_engine.exe`, AI models) in `assets/bin/` and `assets/models/` — **partial**: `ffmpeg.exe`/`ffplay.exe`/`ffprobe.exe` + `ggml-base.bin` + `nudenet.onnx` present; `scanner_engine.exe` and `whisper-cli.exe` **missing** — without them the packaged app cannot run a real scan.
+- [x] Multi-thread CPU & DirectML GPU acceleration configuration — `scanner_engine.py` now exposes `--threads` (ONNX + whisper.cpp) and `--provider` (cpu,dml,cuda,tensorrt); DirectML activates when built with `onnxruntime-directml`.
+- [x] Bundle static binaries (`ffmpeg.exe`, `ffprobe.exe`, `ffplay.exe`, `scanner_engine.exe`, `whisper-cli.exe` + whisper.cpp DLLs) in `assets/bin/` and AI models (`ggml-base.bin`, `nudenet.onnx`) in `assets/models/`. Installer `SafeScene_Setup_v1.0.0.exe` rebuilt (Inno Setup) with both the Flutter-embedded assets and the raw `{app}\assets` copies.
 - [x] Build standalone Windows installer using **Inno Setup** (`safe_scene_installer.iss` → `dist/SafeScene_Setup_v1.0.0.exe`).
 
 ---

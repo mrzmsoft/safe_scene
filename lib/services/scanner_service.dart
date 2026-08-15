@@ -143,8 +143,30 @@ class ScannerService {
     final root = await _defaultRuntimeAssetRootDirectory();
     _runtimeAssetRootPath = root.path;
 
+    const whisperDlls = <String>[
+      'whisper.dll',
+      'ggml.dll',
+      'ggml-base.dll',
+      'ggml-cpu-alderlake.dll',
+      'ggml-cpu-cannonlake.dll',
+      'ggml-cpu-cascadelake.dll',
+      'ggml-cpu-haswell.dll',
+      'ggml-cpu-icelake.dll',
+      'ggml-cpu-sandybridge.dll',
+      'ggml-cpu-skylakex.dll',
+      'ggml-cpu-sse42.dll',
+      'ggml-cpu-x64.dll',
+    ];
+
     final folders = <String, List<String>>{
-      'bin': [name, 'ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe'],
+      'bin': [
+        name,
+        'ffmpeg.exe',
+        'ffprobe.exe',
+        'ffplay.exe',
+        'whisper-cli.exe',
+        ...whisperDlls,
+      ],
       'models': ['nudenet.onnx', 'ggml-base.bin'],
     };
 
@@ -324,11 +346,27 @@ class ScannerService {
       );
     }
 
+    // Point the engine at the bundled FFmpeg binaries in the runtime bin
+    // folder so scanning works even when ffmpeg is not on PATH. (Both files
+    // are copied there by prepareBundledRuntimeAssets above.)
+    final ffmpegPath = _runtimeAssetRootPath == null
+        ? null
+        : '$_runtimeAssetRootPath${Platform.pathSeparator}bin'
+            '${Platform.pathSeparator}ffmpeg.exe';
+    final ffprobePath = _runtimeAssetRootPath == null
+        ? null
+        : '$_runtimeAssetRootPath${Platform.pathSeparator}bin'
+            '${Platform.pathSeparator}ffprobe.exe';
+
     final arguments = <String>[
       '--input',
       inputPath,
       if (outputPath != null) ...['--output', outputPath],
       if (modelsDir != null) ...['--models-dir', modelsDir],
+      if (ffmpegPath != null && File(ffmpegPath).existsSync())
+        ...['--ffmpeg', ffmpegPath],
+      if (ffprobePath != null && File(ffprobePath).existsSync())
+        ...['--ffprobe', ffprobePath],
     ];
 
     Process process;

@@ -25,6 +25,7 @@ import '../widgets/scene_editor_drawer.dart';
 /// * `Esc` – exit fullscreen
 /// * `E` – open the Scene Editor (PIN required)
 /// * `[` / `]` – mark segment start / end inside the editor
+/// * `S` / `M` – save the marked range as a Skip / Mute segment
 class VideoPlayerPage extends StatefulWidget {
   const VideoPlayerPage({
     super.key,
@@ -215,6 +216,38 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
     });
   }
 
+  /// Saves a new segment from the current `[start]` / `]end]` marks with the
+  /// given [action] (bound to `S` = skip, `M` = mute).
+  void _saveFromMarks(FilterAction action) {
+    final start = _markStart;
+    final end = _markEnd;
+    if (start == null || end == null || start >= end) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text('Set both [start] and ]end] marks first (S/M).'),
+        ),
+      );
+      return;
+    }
+    final segment = FilterSegment(
+      id: 'manual_${DateTime.now().millisecondsSinceEpoch}',
+      start: start,
+      end: end,
+      action: action,
+      category: action.label,
+      source: 'manual',
+    );
+    widget.controller.addSegment(segment);
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          'Added ${action.label} segment '
+          '${formatTimestamp(start)}\u2013${formatTimestamp(end)}',
+        ),
+      ),
+    );
+  }
+
   Future<void> _seekRelative(Duration delta) {
     var target = _position + delta;
     if (target < Duration.zero) target = Duration.zero;
@@ -272,6 +305,15 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
       }
       if (key == LogicalKeyboardKey.bracketRight) {
         _markSegment(isStart: false);
+        _pokeControls();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.keyS || key == LogicalKeyboardKey.keyM) {
+        _saveFromMarks(
+          key == LogicalKeyboardKey.keyS
+              ? FilterAction.skip
+              : FilterAction.mute,
+        );
         _pokeControls();
         return KeyEventResult.handled;
       }

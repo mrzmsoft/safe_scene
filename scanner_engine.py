@@ -25,6 +25,11 @@ Behaviours
 * ``--models-dir <dir>``         directory holding the bundled AI assets
                                  (ggml-base.bin, nudenet.onnx, labels.json,
                                   profanity.txt, whisper-cli.exe)
+* ``--provider <list>``          comma-separated ONNX Runtime providers in
+                                 priority order: cpu,dml,cuda,tensorrt
+                                 (default: cpu; unavailable ones are skipped)
+* ``--threads <n>``              worker thread count for ONNX inference and
+                                 whisper.cpp (default: auto)
 
 Sub-systems (each degrades gracefully if its assets are missing):
   1. Audio  : ffmpeg -> 16 kHz mono WAV -> faster-whisper (word timestamps)
@@ -148,6 +153,12 @@ def _which(name: str, models_dir: str | None = None,
     found = find_file(name, models_dir)
     if found:
         return found
+    # Windows: also search the same locations using the executable extension
+    # (e.g. a whisper.cpp CLI shipped as "whisper-cli.exe" rather than "whisper-cli").
+    if os.name == "nt" and not name.lower().endswith(".exe"):
+        found = find_file(name + ".exe", models_dir)
+        if found:
+            return found
     return shutil.which(name)
 
 
@@ -303,19 +314,21 @@ def transcribe_faster_whisper(model_dir: str | None, wav_path: str, model_path: 
     return words
 
 
-def transcribe_whisper_cpp(cli_path, model_path, wav_path):
+def transcribe_whisper_cpp(cli_path, model_path, wav_path, threads=None):
     """
-    whisper.cpp subprocess fallback: runs the CLI with JSON output and parses
-    word-level timestamps when present; otherwise distributes each segment's
-    text evenly across its time window to approximate word timestamps.
+    whisper.cpp subprocess backend: runs the CLI with full JSON output and
+    parses word-level timestamps when present; otherwise distributes each
+    segment's text evenly across its time window to approximate timestamps.
     Returns a list of (word, start_s, end_s) tuples.
     """
     json_base = os.path.splitext(wav_path)[0] + "_whisper"
     cmd = [
         cli_path, "-m", model_path, "-f", wav_path,
-        "-oj", "-of", json_base, "-nt",
+        "-ojf", "-of", json_base,   # -ojf => token-level timestamps
         "-l", "auto", "-np",
     ]
+    if threads and threads > 0:
+        cmd += ["-t", str(threads)]
     proc = run_cmd(cmd, capture_output=True)
     if proc.returncode != 0:
         _log(f"whisper.cpp failed: {proc.stderr.strip() or proc.stdout.strip()}")
@@ -329,11 +342,67 @@ def transcribe_whisper_cpp(cli_path, model_path, wav_path):
     with open(json_path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
 
-    # Whisper.cpp nests the transcript under "transcription" or "result".
+    return parse_whisper_json(data)
+
+
+def parse_whisper_json(data: dict) -> list:
+    """Parse word timestamps from either whisper.cpp JSON layout.
+
+    New format (>= 1.7): ``data["transcription"]`` is a *list* of segments;
+    each segment carries ``offsets.{from,to}`` (ms) and a ``tokens`` array of
+    ``{text, offsets}`` entries.
+    Old format: ``data["transcription"]["segments"]`` (a dict) with ``t1/t2``
+    (seconds) and ``words`` as ``{w, t: [start, end]}``.
+
+    Returns a list of (word, start_s, end_s) tuples.
+    """
     root = data.get("transcription") or data.get("result") or data
-    segments = root.get("segments") or []
-    words = []
+    if isinstance(root, list):
+        return _parse_whisper_segments_new(root)
+    if isinstance(root, dict):
+        return _parse_whisper_segments_old(root)
+    return []
+
+
+def _parse_whisper_segments_new(segments: list) -> list:
+    """whisper.cpp >= 1.7: transcription is a list; times are ms in `offsets`."""
+    words: list = []
     for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        seg_text = str(seg.get("text", "") or "")
+        offs = seg.get("offsets") or {}
+        seg_from = float(offs.get("from", 0)) / 1000.0 if offs else 0.0
+        seg_to = float(offs.get("to", 0)) / 1000.0 if offs else seg_from
+
+        toks = seg.get("tokens") or seg.get("words") or []
+        if toks:
+            for w in toks:
+                if not isinstance(w, dict):
+                    continue
+                wtext = str(w.get("text") or w.get("w") or "")
+                if not wtext:
+                    continue
+                woffs = w.get("offsets") or {}
+                if woffs:
+                    start = float(woffs.get("from", 0)) / 1000.0
+                    end = float(woffs.get("to", start)) / 1000.0
+                else:
+                    ts = w.get("t")
+                    if isinstance(ts, (list, tuple)) and len(ts) == 2:
+                        start, end = float(ts[0]), float(ts[1])
+                    else:
+                        continue
+                words.append((wtext, start, end))
+        else:
+            _distribute_words(seg_text, seg_from, seg_to, words)
+    return words
+
+
+def _parse_whisper_segments_old(root: dict) -> list:
+    """whisper.cpp < 1.7: transcription is a dict with a `segments` list."""
+    words: list = []
+    for seg in root.get("segments") or []:
         seg_words = seg.get("words") or []
         t1 = float(seg.get("t1", 0.0))
         t2 = float(seg.get("t2", t1))
@@ -343,20 +412,24 @@ def transcribe_whisper_cpp(cli_path, model_path, wav_path):
                 ts = w.get("t") or [t1, t2]
                 words.append((wtext, float(ts[0]), float(ts[1])))
         else:
-            # Approximate word timestamps by even distribution across segment.
-            text = str(seg.get("text", "") or "")
-            tokens = [t for t in re.split(r"\s+", text) if t]
-            if tokens and t2 > t1:
-                span = (t2 - t1) / len(tokens)
-                for i, tok in enumerate(tokens):
-                    words.append((tok, t1 + i * span, t1 + (i + 1) * span))
-            elif tokens:
-                for tok in tokens:
-                    words.append((tok, t1, t1))
+            _distribute_words(str(seg.get("text", "") or ""), t1, t2, words)
     return words
 
 
-def run_audio_analysis(ffmpeg, video, tmpdir, models_dir, whisper_cpp):
+def _distribute_words(text: str, t1: float, t2: float, out: list) -> None:
+    """Evenly distribute ``text``'s tokens across ``[t1, t2]``."""
+    tokens = [t for t in re.split(r"\s+", text) if t]
+    if tokens and t2 > t1:
+        span = (t2 - t1) / len(tokens)
+        for i, tok in enumerate(tokens):
+            out.append((tok, t1 + i * span, t1 + (i + 1) * span))
+    elif tokens:
+        for tok in tokens:
+            out.append((tok, t1, t1))
+
+
+def run_audio_analysis(ffmpeg, video, tmpdir, models_dir, whisper_cpp,
+                       threads=None):
     """
     Returns a list of raw mute segments [(start_s, end_s, word)] discovered by
     transcribing the audio and matching words against the profanity dictionary.
@@ -369,7 +442,7 @@ def run_audio_analysis(ffmpeg, video, tmpdir, models_dir, whisper_cpp):
         _log("Skipping audio analysis (could not extract audio).")
         return hits
 
-    transcription = _transcribe(wav_path, models_dir, whisper_cpp)
+    transcription = _transcribe(wav_path, models_dir, whisper_cpp, threads=threads)
     for word, start, end in transcription:
         if is_profanity(word, dictionary):
             hits.append((start, end, word))
@@ -379,15 +452,17 @@ def run_audio_analysis(ffmpeg, video, tmpdir, models_dir, whisper_cpp):
     return hits
 
 
-def _transcribe(wav_path, models_dir, whisper_cpp):
-    """Pick faster-whisper first, then whisper.cpp."""
+def _transcribe(wav_path, models_dir, whisper_cpp, threads=None):
+    """Prefer the bundled whisper.cpp CLI (the roadmap audio engine), falling
+    back to faster-whisper (which requires a CTranslate2-format model)."""
     model_file = find_file("ggml-base.bin", models_dir)
+    if whisper_cpp and model_file:
+        return transcribe_whisper_cpp(
+            whisper_cpp, model_file, wav_path, threads=threads)
     try:
         return transcribe_faster_whisper(models_dir, wav_path, model_file or "")
     except Exception as exc:  # noqa: BLE001
-        _log(f"faster-whisper unavailable ({exc}); trying whisper.cpp.")
-    if whisper_cpp and model_file:
-        return transcribe_whisper_cpp(whisper_cpp, model_file, wav_path)
+        _log(f"faster-whisper unavailable ({exc}); audio analysis skipped.")
     _log("No working transcription backend found; audio analysis skipped.")
     return []
 # ---------------------------------------------------------------------------
@@ -432,19 +507,74 @@ def _frame_number(path: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def load_model(onnx_path: str, models_dir: str | None):
+def load_model(onnx_path: str, models_dir: str | None,
+               providers_req: str | None = None, threads: int | None = None):
     """Load the ONNX session + labels; returns (session, labels, model_type)."""
     try:
         import onnxruntime as ort  # bundled at build time; optional  # type: ignore[import-not-found]
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"onnxruntime not available: {exc}")
 
-    session = ort.InferenceSession(
-        onnx_path, providers=["CPUExecutionProvider"],
-    )
+    providers = resolve_providers(providers_req)
+    if providers_req and providers_req.lower().strip() not in ("", "cpu"):
+        _log(f"Requested ONNX providers '{providers_req}'; using {providers}.")
+
+    sess_options = build_session_options(threads)
+    try:
+        session = ort.InferenceSession(
+            onnx_path, sess_options=sess_options, providers=providers)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"Session creation failed with {providers} ({exc}); retrying CPU.")
+        session = ort.InferenceSession(
+            onnx_path, sess_options=sess_options,
+            providers=["CPUExecutionProvider"])
+
+    active = session.get_providers()
+    _log("ONNX active providers: " + ", ".join(active)
+         + (f"; threads={threads}" if threads else "; threads=auto"))
     model_type = _classify_model(session)
     labels = _load_labels(models_dir, model_type)
     return session, labels, model_type
+
+
+def build_session_options(threads: int | None):
+    """ONNX Runtime session options with explicit worker-thread tuning."""
+    import onnxruntime as ort
+    opts = ort.SessionOptions()
+    if threads and threads > 0:
+        opts.intra_op_num_threads = threads
+        opts.inter_op_num_threads = max(1, (threads + 1) // 2)
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    return opts
+
+
+def resolve_providers(requested: str | None) -> list:
+    """Map a comma-separated provider request to installed onnxruntime
+    provider names (in priority order), always keeping CPU as the fallback.
+
+    ``--provider cpu,dml`` tries DirectML first (needs the onnxruntime-directml
+    build) and falls back to CPU when the provider is not installed.
+    """
+    import onnxruntime as ort
+    available = set(ort.get_available_providers())
+    if not requested:
+        return ["CPUExecutionProvider"]
+    names = {
+        "cpu": "CPUExecutionProvider",
+        "dml": "DmlExecutionProvider",
+        "directml": "DmlExecutionProvider",
+        "cuda": "CUDAExecutionProvider",
+        "tensorrt": "TensorrtExecutionProvider",
+        "coreml": "CoreMLExecutionProvider",
+    }
+    providers = []
+    for key in (p.strip().lower() for p in requested.split(",") if p.strip()):
+        name = names.get(key)
+        if name and name in available and name not in providers:
+            providers.append(name)
+    if "CPUExecutionProvider" not in providers:
+        providers.append("CPUExecutionProvider")
+    return providers
 
 
 def _load_labels(models_dir: str | None, model_type: str) -> list:
@@ -588,7 +718,8 @@ def _interpret_classifier(outs, labels, threshold, safe_idx):
     return conf, label
 
 
-def run_visual_analysis(ffmpeg, video, tmpdir, models_dir, frames):
+def run_visual_analysis(ffmpeg, video, tmpdir, models_dir, frames,
+                        providers_req=None, threads=None):
     """
     Return a list of raw skip segments
     [(start_s, end_s, confidence, label)] for frames whose NSFW confidence
@@ -600,7 +731,9 @@ def run_visual_analysis(ffmpeg, video, tmpdir, models_dir, frames):
         return []
 
     try:
-        session, labels, model_type = load_model(onnx_path, models_dir)
+        session, labels, model_type = load_model(
+            onnx_path, models_dir,
+            providers_req=providers_req, threads=threads)
     except Exception as exc:  # noqa: BLE001
         _log(f"ONNX session load failed ({exc}); visual analysis skipped.")
         return []
@@ -774,6 +907,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ffprobe", default=None, help="override path to ffprobe")
     p.add_argument("--whisper-cli", default=None,
                    help="override path to whisper.cpp CLI")
+    p.add_argument("--provider", default="cpu",
+                   help="comma-separated ONNX Runtime providers in priority "
+                        "order: cpu,dml,cuda,tensorrt (default: cpu)")
+    p.add_argument("--threads", type=int, default=None,
+                   help="worker thread count for ONNX inference and "
+                        "whisper.cpp (default: auto)")
     p.add_argument("--temp-dir", default=None,
                    help="directory for intermediate files (default: system temp)")
     p.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
@@ -790,8 +929,19 @@ def run_scan(args) -> int:
 
     ffmpeg = _which("ffmpeg", args.models_dir, args.ffmpeg)
     ffprobe = _which("ffprobe", args.models_dir, args.ffprobe)
-    whisper_cpp = _which("whisper-cli", args.models_dir, args.whisper_cli) \
-        or _which("main", args.models_dir, None)
+    whisper_cpp = _which("whisper-cli", args.models_dir, args.whisper_cli)
+    if not whisper_cpp:
+        # whisper.cpp builds are often shipped as "main"/"main.exe". Only accept
+        # real executables so PATH lookups cannot resolve to system control
+        # panel applets (e.g. main.cpl) that are not runnable programs.
+        for candidate in ("main.exe", "main"):
+            found = _which(candidate, args.models_dir, None)
+            if found is None:
+                continue
+            if os.name == "nt" and not found.lower().endswith(".exe"):
+                continue
+            whisper_cpp = found
+            break
     if not ffmpeg:
         _log("WARNING: ffmpeg not found; audio and visual analysis are disabled.")
 
@@ -801,6 +951,10 @@ def run_scan(args) -> int:
 
     _log(f"Input  : {input_path}")
     _log(f"Output : {out_path}")
+    if args.provider and args.provider.lower().strip() not in ("", "cpu"):
+        _log(f"ONNX provider request: {args.provider}")
+    if args.threads and args.threads > 0:
+        _log(f"Worker threads: {args.threads}")
 
     duration_s = media_duration(input_path, ffprobe) if ffmpeg else 0.0
     media_hash_hex = media_hash(input_path)
@@ -813,7 +967,8 @@ def run_scan(args) -> int:
         if ffmpeg:
             _progress(0.05)
             mute_hits = run_audio_analysis(
-                ffmpeg, input_path, tmp, args.models_dir, whisper_cpp)
+                ffmpeg, input_path, tmp, args.models_dir, whisper_cpp,
+                threads=args.threads)
             _progress(0.40)
         else:
             _progress(0.40)
@@ -824,7 +979,8 @@ def run_scan(args) -> int:
             frames = extract_frames(ffmpeg, input_path, os.path.join(tmp, "frames"))
             _progress(0.42)
             skip_hits = run_visual_analysis(
-                ffmpeg, input_path, tmp, args.models_dir, frames)
+                ffmpeg, input_path, tmp, args.models_dir, frames,
+                providers_req=args.provider, threads=args.threads)
             _progress(0.95)
         else:
             _progress(0.95)

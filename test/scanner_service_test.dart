@@ -7,12 +7,16 @@ import 'package:safe_scene/services/scanner_service.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('ScannerService resolves the repository scanner script in dev mode', () {
+  test('ScannerService resolves the bundled scanner executable in assets/bin',
+      () {
     final service = ScannerService();
     final command = service.resolveCommand();
 
     expect(command, isNotNull);
-    expect(command!.last.replaceAll('\\', '/'), endsWith('scanner_engine.py'));
+    expect(
+      command!.last.replaceAll('\\', '/'),
+      endsWith('assets/bin/scanner_engine.exe'),
+    );
   });
 
   test('ScannerService resolves the roadmap models directory when present', () {
