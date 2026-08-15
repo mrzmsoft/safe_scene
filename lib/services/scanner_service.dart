@@ -93,7 +93,7 @@ class ScannerService {
 
     final runtimeBinDir = _runtimeAssetRootPath == null
         ? null
-        : Directory('${_runtimeAssetRootPath}${Platform.pathSeparator}bin');
+        : Directory('$_runtimeAssetRootPath${Platform.pathSeparator}bin');
     final runtimeExe = runtimeBinDir != null
         ? File('${runtimeBinDir.path}${Platform.pathSeparator}$name')
         : null;
@@ -131,7 +131,7 @@ class ScannerService {
 
     if (_runtimeAssetRootPath != null) {
       final runtimeModels = Directory(
-        '${_runtimeAssetRootPath}${Platform.pathSeparator}models',
+        '$_runtimeAssetRootPath${Platform.pathSeparator}models',
       );
       if (runtimeModels.existsSync()) return runtimeModels.path;
     }
