@@ -32,8 +32,8 @@ class ScannerCancelledException extends ScannerException {
 /// Only one scan runs at a time per service instance; concurrent calls throw.
 class ScannerService {
   ScannerService({String? executablePath, String? modelsDir})
-      : _executablePath = executablePath,
-        _modelsDir = modelsDir;
+    : _executablePath = executablePath,
+      _modelsDir = modelsDir;
 
   final String? _executablePath;
   final String? _modelsDir;
@@ -77,38 +77,111 @@ class ScannerService {
   List<String>? resolveCommand() {
     final override = _executablePath;
     if (override != null && File(override).existsSync()) {
-      return [override];
+      return _commandForPath(override);
     }
-    final exe = _findInBundleRepos(name);
+    final env = Platform.environment['SAFE_SCENE_SCANNER'];
+    if (env != null && env.isNotEmpty && File(env).existsSync()) {
+      return _commandForPath(env);
+    }
+
+    final exe = _findCandidate(name);
     if (exe != null) return [exe];
-    final script = _findInBundleRepos(scriptName);
-    if (script != null) {
-      return [Platform.isWindows ? 'python' : 'python3', script];
-    }
+
+    final script = _findCandidate(scriptName);
+    if (script != null) return _commandForPath(script);
+
     return null;
   }
 
-  static String? _findInBundleRepos(String fileName) {
-    final env = Platform.environment['SAFE_SCENE_SCANNER'];
-    if (env != null && env.isNotEmpty && File(env).existsSync()) {
+  /// Resolves the models directory passed to the scanner. This mirrors the
+  /// roadmap packaging layout (`assets/models`) while keeping dev-mode runs
+  /// working from the repository root.
+  String? resolveModelsDir() {
+    final override = _modelsDir;
+    if (override != null && Directory(override).existsSync()) return override;
+
+    final env = Platform.environment['SAFE_SCENE_MODELS'];
+    if (env != null && env.isNotEmpty && Directory(env).existsSync()) {
       return env;
     }
-    final candidates = <String>[];
-    try {
-      final exeDir = File(Platform.resolvedExecutable).parent.path;
-      candidates.addAll([
-        '$exeDir${Platform.pathSeparator}$fileName',
-        '$exeDir${Platform.pathSeparator}bin${Platform.pathSeparator}$fileName',
-      ]);
-    } catch (_) {
-      // resolvedExecutable is unavailable in some contexts (e.g. tests).
+
+    return _findDirectory('assets${Platform.pathSeparator}models');
+  }
+
+  static List<String> _commandForPath(String path) {
+    if (path.toLowerCase().endsWith('.py')) {
+      return [Platform.isWindows ? 'python' : 'python3', path];
     }
-    candidates.add(fileName); // current working directory
+    return [path];
+  }
+
+  static String? _findCandidate(String fileName) {
+    final candidates = <String>[];
+    final roots = _candidateRoots();
+
+    for (final root in roots) {
+      candidates.addAll([
+        '$root${Platform.pathSeparator}$fileName',
+        '$root${Platform.pathSeparator}bin${Platform.pathSeparator}$fileName',
+        '$root${Platform.pathSeparator}assets${Platform.pathSeparator}bin${Platform.pathSeparator}$fileName',
+      ]);
+    }
+
+    candidates.add(fileName);
     for (final candidate in candidates) {
       if (File(candidate).existsSync()) return candidate;
     }
     return null;
   }
+
+  static String? _findDirectory(String relativePath) {
+    for (final root in _candidateRoots()) {
+      final candidate = '$root${Platform.pathSeparator}$relativePath';
+      if (Directory(candidate).existsSync()) return candidate;
+    }
+    return null;
+  }
+
+  static List<String> _candidateRoots() {
+    final roots = <String>[];
+
+    void add(String? path) {
+      if (path == null || path.isEmpty) return;
+      final normalized = Directory(path).absolute.path;
+      if (!roots.contains(normalized)) roots.add(normalized);
+    }
+
+    add(Directory.current.path);
+    final projectRoot = _findProjectRoot(Directory.current);
+    add(projectRoot?.path);
+
+    try {
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      add(exeDir);
+      add(
+        '$exeDir${Platform.pathSeparator}data${Platform.pathSeparator}flutter_assets',
+      );
+    } catch (_) {
+      // resolvedExecutable is unavailable in some contexts (e.g. tests).
+    }
+
+    return roots;
+  }
+
+  static Directory? _findProjectRoot(Directory start) {
+    var dir = start.absolute;
+    while (true) {
+      if (File(
+        '${dir.path}${Platform.pathSeparator}pubspec.yaml',
+      ).existsSync()) {
+        return dir;
+      }
+      final parent = dir.parent;
+      if (parent.path == dir.path) return null;
+      dir = parent;
+    }
+  }
+
   // --------------------------------------------------------------------
   // Live scan
   // --------------------------------------------------------------------
@@ -145,7 +218,7 @@ class ScannerService {
     String? outputPath,
     String? modelsDir,
   }) async {
-    modelsDir ??= _modelsDir;
+    modelsDir ??= resolveModelsDir();
 
     if (_process != null) {
       throw const ScannerException('A scan is already running.');
@@ -160,7 +233,8 @@ class ScannerService {
     }
 
     final arguments = <String>[
-      '--input', inputPath,
+      '--input',
+      inputPath,
       if (outputPath != null) ...['--output', outputPath],
       if (modelsDir != null) ...['--models-dir', modelsDir],
     ];
@@ -182,16 +256,19 @@ class ScannerService {
     final completer = Completer<ScanResult>();
     var latest = const ScanProgress.initial();
     String? resultJson;
+    final stderrTail = <String>[];
 
     void emit(ScanProgress next) {
       latest = next;
       if (!_progress.isClosed) _progress.add(next);
     }
 
-    emit(latest.copyWith(
-      phase: ScanPhase.preparing,
-      message: 'Launching scanner…',
-    ));
+    emit(
+      latest.copyWith(
+        phase: ScanPhase.preparing,
+        message: 'Launching scanner…',
+      ),
+    );
 
     void complete(ScanResult result) {
       if (!completer.isCompleted) completer.complete(result);
@@ -204,36 +281,39 @@ class ScannerService {
     final outSub = process.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())
-        .listen(
-      (line) {
-        if (line.startsWith('PROGRESS:')) {
-          final value = double.tryParse(
-            line.substring('PROGRESS:'.length).trim(),
-          );
-          if (value != null) {
-            final fraction = value.clamp(0.0, 1.0);
-            emit(latest.copyWith(
-              percentage: fraction,
-              phase: _phaseFor(fraction),
-            ));
+        .listen((line) {
+          if (line.startsWith('PROGRESS:')) {
+            final value = double.tryParse(
+              line.substring('PROGRESS:'.length).trim(),
+            );
+            if (value != null) {
+              final fraction = value.clamp(0.0, 1.0);
+              emit(
+                latest.copyWith(
+                  percentage: fraction,
+                  phase: _phaseFor(fraction),
+                ),
+              );
+            }
+          } else if (line.startsWith('RESULT:')) {
+            resultJson = line.substring('RESULT:'.length).trim();
           }
-        } else if (line.startsWith('RESULT:')) {
-          resultJson = line.substring('RESULT:'.length).trim();
-        }
-      },
-      onError: (Object e) => fail(ScannerException('stdout error: $e')),
-    );
+        }, onError: (Object e) => fail(ScannerException('stdout error: $e')));
 
     final errSub = process.stderr
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(
-      (line) {
-        final parsed = _parseCounterLine(line, latest);
-        if (parsed != null) emit(parsed);
-      },
-      onError: (_) {/* stderr is diagnostic only; ignore */},
-    );
+          (line) {
+            stderrTail.add(line);
+            if (stderrTail.length > 8) stderrTail.removeAt(0);
+            final parsed = _parseCounterLine(line, latest);
+            if (parsed != null) emit(parsed);
+          },
+          onError: (_) {
+            /* stderr is diagnostic only; ignore */
+          },
+        );
 
     process.exitCode.then((code) async {
       await outSub.cancel();
@@ -249,12 +329,14 @@ class ScannerService {
         try {
           final json = jsonDecode(resultJson!) as Map<String, dynamic>;
           final result = ScanResult.fromJson(json);
-          emit(latest.copyWith(
-            percentage: 1.0,
-            phase: ScanPhase.done,
-            segmentsFound: result.segments.length,
-            message: 'Scan complete',
-          ));
+          emit(
+            latest.copyWith(
+              percentage: 1.0,
+              phase: ScanPhase.done,
+              segmentsFound: result.segments.length,
+              message: 'Scan complete',
+            ),
+          );
           complete(result);
         } catch (e) {
           fail(ScannerException('Failed to parse RESULT payload: $e'));
@@ -262,9 +344,12 @@ class ScannerService {
         return;
       }
 
-      fail(ScannerException(
-        'Scanner exited (code $code) without producing a RESULT.',
-      ));
+      final details = stderrTail.isEmpty ? '' : '\n${stderrTail.join('\n')}';
+      fail(
+        ScannerException(
+          'Scanner exited (code $code) without producing a RESULT.$details',
+        ),
+      );
     });
 
     return completer.future;
@@ -343,7 +428,8 @@ class ScannerService {
   static Future<ScanResult?> _tryParseRule(File file) async {
     if (!await file.exists()) return null;
     try {
-      final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final json =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       return ScanResult.fromJson(json);
     } catch (_) {
       return null;

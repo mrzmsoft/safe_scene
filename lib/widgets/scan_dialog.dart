@@ -77,15 +77,22 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
       if (mounted) setState(() => _progress = p);
     });
 
-    widget.scanFuture.then((_) {
-      if (mounted) Navigator.of(context).pop(ScanDialogCloseReason.completed);
-    }).catchError((Object e) {
-      if (!mounted) return;
-      if (e is! ScannerCancelledException) {
-        setState(() => _error = e.toString());
-      }
-      Navigator.of(context).pop(ScanDialogCloseReason.cancelled);
-    });
+    widget.scanFuture
+        .then((_) {
+          if (mounted) {
+            Navigator.of(context).pop(ScanDialogCloseReason.completed);
+          }
+        })
+        .catchError((Object e) {
+          if (!mounted) {
+            return;
+          }
+          if (e is ScannerCancelledException) {
+            Navigator.of(context).pop(ScanDialogCloseReason.cancelled);
+          } else {
+            setState(() => _error = e.toString());
+          }
+        });
   }
 
   @override
@@ -94,10 +101,18 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
     super.dispose();
   }
 
-  void _onCancel() => widget.scanner.cancel();
+  void _onCancel() {
+    if (_error != null) {
+      Navigator.of(context).pop(ScanDialogCloseReason.cancelled);
+      return;
+    }
+    widget.scanner.cancel();
+  }
 
-  void _onBackground() =>
-      Navigator.of(context).pop(ScanDialogCloseReason.background);
+  void _onBackground() {
+    if (_error != null) return;
+    Navigator.of(context).pop(ScanDialogCloseReason.background);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -129,8 +144,10 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
                     ),
                   ),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.lightBlueAccent.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(12),
@@ -212,12 +229,29 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
               ),
               if (_error != null) ...[
                 const SizedBox(height: 16),
-                Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.error,
-                    fontSize: 12,
+                Container(
+                  width: double.infinity,
+                  constraints: const BoxConstraints(maxHeight: 120),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.errorContainer.withValues(alpha: 0.24),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.error.withValues(alpha: 0.5),
+                    ),
+                  ),
+                  child: SingleChildScrollView(
+                    child: Text(
+                      _error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                        fontSize: 12,
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -227,8 +261,8 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: _onCancel,
-                      icon: const Icon(Icons.cancel),
-                      label: const Text('Cancel'),
+                      icon: Icon(_error == null ? Icons.cancel : Icons.close),
+                      label: Text(_error == null ? 'Cancel' : 'Close'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white70,
                         side: const BorderSide(color: Colors.white24),
@@ -239,7 +273,7 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton.icon(
-                      onPressed: _onBackground,
+                      onPressed: _error == null ? _onBackground : null,
                       icon: const Icon(Icons.history_toggle_off),
                       label: const Text('Run in Background'),
                       style: FilledButton.styleFrom(
