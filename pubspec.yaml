@@ -53,6 +53,10 @@ dependencies:
   # Streaming SHA-256 hashing for matching a media file to its .safe rule set.
   crypto: ^3.0.6
 
+  # Access the app support directory so bundled scanner assets can be copied
+  # to a writable runtime folder before launching the Python worker.
+  path_provider: ^2.1.5
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

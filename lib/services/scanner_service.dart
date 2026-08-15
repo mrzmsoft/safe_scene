@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+
 import '../models/scan_progress.dart';
 import '../utils/file_hash.dart';
 
@@ -37,9 +40,13 @@ class ScannerService {
 
   final String? _executablePath;
   final String? _modelsDir;
+  String? _runtimeAssetRootPath;
 
   final StreamController<ScanProgress> _progress =
       StreamController<ScanProgress>.broadcast();
+
+  String get runtimeAssetRootPath =>
+      _runtimeAssetRootPath ?? _defaultRuntimeAssetRootPath;
 
   Process? _process;
   bool _cancelRequested = false;
@@ -84,8 +91,25 @@ class ScannerService {
       return _commandForPath(env);
     }
 
+    final runtimeBinDir = _runtimeAssetRootPath == null
+        ? null
+        : Directory('${_runtimeAssetRootPath}${Platform.pathSeparator}bin');
+    final runtimeExe = runtimeBinDir != null
+        ? File('${runtimeBinDir.path}${Platform.pathSeparator}$name')
+        : null;
+    if (runtimeExe != null && runtimeExe.existsSync()) {
+      return [runtimeExe.path];
+    }
+
     final exe = _findCandidate(name);
     if (exe != null) return [exe];
+
+    final runtimeScript = runtimeBinDir != null
+        ? File('${runtimeBinDir.path}${Platform.pathSeparator}$scriptName')
+        : null;
+    if (runtimeScript != null && runtimeScript.existsSync()) {
+      return _commandForPath(runtimeScript.path);
+    }
 
     final script = _findCandidate(scriptName);
     if (script != null) return _commandForPath(script);
@@ -105,7 +129,48 @@ class ScannerService {
       return env;
     }
 
+    if (_runtimeAssetRootPath != null) {
+      final runtimeModels = Directory(
+        '${_runtimeAssetRootPath}${Platform.pathSeparator}models',
+      );
+      if (runtimeModels.existsSync()) return runtimeModels.path;
+    }
+
     return _findDirectory('assets${Platform.pathSeparator}models');
+  }
+
+  Future<void> prepareBundledRuntimeAssets() async {
+    final root = await _defaultRuntimeAssetRootDirectory();
+    _runtimeAssetRootPath = root.path;
+
+    final folders = <String, List<String>>{
+      'bin': [name, 'ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe'],
+      'models': ['nudenet.onnx', 'ggml-base.bin'],
+    };
+
+    for (final entry in folders.entries) {
+      final folder = Directory(
+        '${root.path}${Platform.pathSeparator}${entry.key}',
+      );
+      await folder.create(recursive: true);
+
+      for (final fileName in entry.value) {
+        final assetPath = 'assets/${entry.key}/$fileName';
+        try {
+          final bytes = await rootBundle.load(assetPath);
+          final outFile = File(
+            '${folder.path}${Platform.pathSeparator}$fileName',
+          );
+          await outFile.writeAsBytes(
+            bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
+            flush: true,
+          );
+        } catch (_) {
+          // The runtime bundle may not include every optional file. Ignore
+          // missing assets and continue; the scanner will fall back gracefully.
+        }
+      }
+    }
   }
 
   static List<String> _commandForPath(String path) {
@@ -168,6 +233,32 @@ class ScannerService {
     return roots;
   }
 
+  Future<Directory> _defaultRuntimeAssetRootDirectory() async {
+    if (_runtimeAssetRootPath != null) {
+      return Directory(_runtimeAssetRootPath!);
+    }
+
+    try {
+      final supportDir = await getApplicationSupportDirectory();
+      final root = Directory(
+        '${supportDir.path}${Platform.pathSeparator}safe_scene_runtime',
+      );
+      await root.create(recursive: true);
+      _runtimeAssetRootPath = root.path;
+      return root;
+    } catch (_) {
+      final root = Directory(
+        '${Directory.systemTemp.path}${Platform.pathSeparator}safe_scene_runtime',
+      );
+      await root.create(recursive: true);
+      _runtimeAssetRootPath = root.path;
+      return root;
+    }
+  }
+
+  static String get _defaultRuntimeAssetRootPath =>
+      '${Directory.systemTemp.path}${Platform.pathSeparator}safe_scene_runtime';
+
   static Directory? _findProjectRoot(Directory start) {
     var dir = start.absolute;
     while (true) {
@@ -218,6 +309,7 @@ class ScannerService {
     String? outputPath,
     String? modelsDir,
   }) async {
+    await prepareBundledRuntimeAssets();
     modelsDir ??= resolveModelsDir();
 
     if (_process != null) {

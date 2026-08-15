@@ -5,6 +5,8 @@ import 'package:safe_scene/models/scan_progress.dart';
 import 'package:safe_scene/services/scanner_service.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('ScannerService resolves the repository scanner script in dev mode', () {
     final service = ScannerService();
     final command = service.resolveCommand();
@@ -20,6 +22,34 @@ void main() {
     expect(modelsDir, isNotNull);
     expect(modelsDir!.replaceAll('\\', '/'), endsWith('assets/models'));
   });
+
+  test(
+    'ScannerService extracts bundled assets into a real runtime folder',
+    () async {
+      final service = ScannerService();
+      await service.prepareBundledRuntimeAssets();
+
+      final runtimeRoot = Directory(service.runtimeAssetRootPath);
+      expect(
+        await Directory(
+          '${runtimeRoot.path}${Platform.pathSeparator}models',
+        ).exists(),
+        isTrue,
+      );
+      expect(
+        await File(
+          '${runtimeRoot.path}${Platform.pathSeparator}models${Platform.pathSeparator}nudenet.onnx',
+        ).exists(),
+        isTrue,
+      );
+      expect(
+        await File(
+          '${runtimeRoot.path}${Platform.pathSeparator}bin${Platform.pathSeparator}ffmpeg.exe',
+        ).exists(),
+        isTrue,
+      );
+    },
+  );
 
   test(
     'ScannerService parses a sidecar RESULT from the Python fallback',
