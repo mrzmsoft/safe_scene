@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
 
 import '../controllers/safe_player_controller.dart';
 import '../models/filter_segment.dart';
@@ -70,8 +71,10 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) return;
       if (existing != null) {
         if (kDebugMode) {
-          debugPrint('SafeScene: auto-loaded ${existing.segments.length} '
-              'rules for ${path.split(Platform.pathSeparator).last}');
+          debugPrint(
+            'SafeScene: auto-loaded ${existing.segments.length} '
+            'rules for ${path.split(Platform.pathSeparator).last}',
+          );
         }
         await _startPlayback(path, existing.segments);
         return;
@@ -105,8 +108,10 @@ class _HomePageState extends State<HomePage> {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text('Scanning in the background — opening the '
-                      'movie will resume once it finishes.'),
+                  content: Text(
+                    'Scanning in the background — opening the '
+                    'movie will resume once it finishes.',
+                  ),
                 ),
               );
             }
@@ -153,19 +158,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  /// Builds a [SafePlayerController] from [segments], opens the media and
-  /// navigates to the player. Disposes the controller when popped.
-  Future<void> _startPlayback(
-    String path,
-    List<FilterSegment> segments,
-  ) async {
+  /// Builds a [SafePlayerController] from [segments], navigates to the player
+  /// and lets the player screen open the media after its video surface exists.
+  Future<void> _startPlayback(String path, List<FilterSegment> segments) async {
     final controller = SafePlayerController(
       segments: segments,
       onSkip: (s) => debugPrint('SafeScene: skipped ${s.category}'),
     );
-
-    // Open the media before navigating so the first frame is ready sooner.
-    await controller.openPath(path);
 
     if (!mounted) {
       await controller.dispose();
@@ -177,6 +176,7 @@ class _HomePageState extends State<HomePage> {
       MaterialPageRoute(
         builder: (_) => VideoPlayerPage(
           controller: controller,
+          media: Media(path),
           title: title,
           autoplay: true,
         ),

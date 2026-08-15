@@ -82,29 +82,29 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
 
     _subs
       ..add(
-        widget.controller.player.stream.playing.listen(
-          (v) => setState(() => _playing = v),
-        ),
+        widget.controller.player.stream.playing.listen((v) {
+          if (mounted) setState(() => _playing = v);
+        }),
       )
       ..add(
-        widget.controller.player.stream.duration.listen(
-          (v) => setState(() => _duration = v),
-        ),
+        widget.controller.player.stream.duration.listen((v) {
+          if (mounted) setState(() => _duration = v);
+        }),
       )
       ..add(
-        widget.controller.player.stream.position.listen(
-          (v) => setState(() => _position = v),
-        ),
+        widget.controller.player.stream.position.listen((v) {
+          if (mounted) setState(() => _position = v);
+        }),
       )
       ..add(
-        widget.controller.player.stream.buffering.listen(
-          (v) => setState(() => _buffering = v),
-        ),
+        widget.controller.player.stream.buffering.listen((v) {
+          if (mounted) setState(() => _buffering = v);
+        }),
       )
       ..add(
-        widget.controller.player.stream.volume.listen(
-          (v) => setState(() => _volume = v),
-        ),
+        widget.controller.player.stream.volume.listen((v) {
+          if (mounted) setState(() => _volume = v);
+        }),
       );
 
     final media = widget.media;
@@ -177,7 +177,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
   Future<void> _openEditor() async {
     final ok = await _security.requirePin(
       context,
-      message: 'Enter your Master PIN to open the Scene Editor. The editor '
+      message:
+          'Enter your Master PIN to open the Scene Editor. The editor '
           'lets you view, add and edit the segments being filtered.',
     );
     if (ok && mounted) setState(() => _editorOpen = true);
@@ -274,86 +275,92 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
 
   @override
   Widget build(BuildContext context) {
-    return Focus(
-      focusNode: _focusNode,
-      autofocus: true,
-      onKeyEvent: _onKeyEvent,
-      child: MouseRegion(
-        onHover: (_) => _pokeControls(),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => _pokeControls(),
-          child: ColoredBox(
-            color: Colors.black,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // Video surface.
-                Video(controller: _videoController, controls: NoVideoControls),
-
-                // Buffering indicator.
-                if (_buffering) const _BufferingIndicator(),
-
-                // Fade overlay that masks skip jumps.
-                ValueListenableBuilder<bool>(
-                  valueListenable: widget.controller.isFading,
-                  builder: (context, fading, _) => AnimatedOpacity(
-                    opacity: fading ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 120),
-                    child: const ColoredBox(color: Colors.black),
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Focus(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: _onKeyEvent,
+        child: MouseRegion(
+          onHover: (_) => _pokeControls(),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _pokeControls(),
+            child: ColoredBox(
+              color: Colors.black,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Video surface.
+                  Video(
+                    controller: _videoController,
+                    controls: NoVideoControls,
                   ),
-                ),
 
-                // Blackout overlay while inside a blackout segment.
-                ValueListenableBuilder<FilterSegment?>(
-                  valueListenable: widget.controller.currentSegment,
-                  builder: (context, segment, _) {
-                    final blackout =
-                        segment != null &&
-                        segment.action == FilterAction.blackout;
-                    return AnimatedOpacity(
-                      opacity: blackout ? 1.0 : 0.0,
-                      duration: const Duration(milliseconds: 200),
+                  // Buffering indicator.
+                  if (_buffering) const _BufferingIndicator(),
+
+                  // Fade overlay that masks skip jumps.
+                  ValueListenableBuilder<bool>(
+                    valueListenable: widget.controller.isFading,
+                    builder: (context, fading, _) => AnimatedOpacity(
+                      opacity: fading ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 120),
                       child: const ColoredBox(color: Colors.black),
-                    );
-                  },
-                ),
-
-                // Overlay controls.
-                AnimatedOpacity(
-                  opacity: _controlsVisible ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 200),
-                  child: IgnorePointer(
-                    ignoring: !_controlsVisible,
-                    child: _buildControls(context),
-                  ),
-                ),
-
-                // Scene Editor side panel (PIN-gated).
-                if (_editorOpen) ...[
-                  // Scrim behind the drawer.
-                  Positioned.fill(
-                    child: GestureDetector(
-                      onTap: _closeEditor,
-                      child: const ColoredBox(color: Colors.black38),
                     ),
                   ),
-                  // Drawer itself.
-                  Positioned(
-                    right: 0,
-                    top: 0,
-                    bottom: 0,
-                    child: SceneEditorDrawer(
-                      controller: widget.controller,
-                      markStart: _markStart,
-                      markEnd: _markEnd,
-                      onPreview: _previewSegment,
-                      onClose: _closeEditor,
-                      onClearMarks: _clearMarks,
+
+                  // Blackout overlay while inside a blackout segment.
+                  ValueListenableBuilder<FilterSegment?>(
+                    valueListenable: widget.controller.currentSegment,
+                    builder: (context, segment, _) {
+                      final blackout =
+                          segment != null &&
+                          segment.action == FilterAction.blackout;
+                      return AnimatedOpacity(
+                        opacity: blackout ? 1.0 : 0.0,
+                        duration: const Duration(milliseconds: 200),
+                        child: const ColoredBox(color: Colors.black),
+                      );
+                    },
+                  ),
+
+                  // Overlay controls.
+                  AnimatedOpacity(
+                    opacity: _controlsVisible ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: IgnorePointer(
+                      ignoring: !_controlsVisible,
+                      child: _buildControls(context),
                     ),
                   ),
+
+                  // Scene Editor side panel (PIN-gated).
+                  if (_editorOpen) ...[
+                    // Scrim behind the drawer.
+                    Positioned.fill(
+                      child: GestureDetector(
+                        onTap: _closeEditor,
+                        child: const ColoredBox(color: Colors.black38),
+                      ),
+                    ),
+                    // Drawer itself.
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: SceneEditorDrawer(
+                        controller: widget.controller,
+                        markStart: _markStart,
+                        markEnd: _markEnd,
+                        onPreview: _previewSegment,
+                        onClose: _closeEditor,
+                        onClearMarks: _clearMarks,
+                      ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),

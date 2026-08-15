@@ -27,7 +27,7 @@ class SafePlayerController {
 
     // If the current media is swapped or playback stops, make sure any active
     // mute is released so the next file starts at a healthy volume.
-    player.stream.playing.listen((playing) {
+    _playingSub = player.stream.playing.listen((playing) {
       if (!playing) {
         _releaseAllMutes();
       }
@@ -71,6 +71,7 @@ class SafePlayerController {
   double _restoreVolume = 100.0;
 
   StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<bool>? _playingSub;
   Timer? _fadeTimer;
 
   bool _isDisposed = false;
@@ -235,6 +236,7 @@ class SafePlayerController {
 
     _fadeTimer?.cancel();
     await _positionSub?.cancel();
+    await _playingSub?.cancel();
     _activeMutes.clear();
     currentSegment.dispose();
     isFading.dispose();
