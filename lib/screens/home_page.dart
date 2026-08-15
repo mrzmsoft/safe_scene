@@ -88,38 +88,8 @@ class _HomePageState extends State<HomePage> {
         return;
       }
 
-      // 3. Run the scan. The future is owned here so "Run in Background" can
-      //    dismiss the dialog yet still resolve to a result later.
-      final scanFuture = _scanner.scan(path);
-      final reason = await ScanDialogWidget.show(
-        context,
-        scanner: _scanner,
-        inputPath: path,
-        scanFuture: scanFuture,
-      );
-      if (!mounted) return;
-
-      switch (reason) {
-        case ScanDialogCloseReason.cancelled:
-          return; // User bailed; keep the video unplayed.
-        case ScanDialogCloseReason.completed:
-        case ScanDialogCloseReason.background:
-          if (reason == ScanDialogCloseReason.background) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Scanning in the background — opening the '
-                    'movie will resume once it finishes.',
-                  ),
-                ),
-              );
-            }
-          }
-          final scanResult = await scanFuture;
-          if (!mounted) return;
-          await _startPlayback(path, scanResult.segments);
-      }
+      // 3. Run the scan and play once a result is available.
+      await _runScanAndPlay(path);
     } on ScannerCancelledException {
       // Silently ignore an explicit cancel; nothing else to do.
     } catch (e) {
@@ -130,9 +100,13 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Asks the user whether to auto-scan the selected movie for Family Mode.
+  ///
+  /// Deliberately not dismissible by tapping outside: dismissing it silently
+  /// falls through to an unfiltered playback, which defeats the purpose.
   Future<bool?> _askAutoScan() {
     return showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF0F172A),
         title: const Text(
@@ -156,6 +130,66 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
     );
+  }
+
+  /// Opens a file picker and immediately scans the selected movie, then plays
+  /// it with the resulting rules. Provides an always-visible, explicit entry
+  /// point for Family Mode scanning.
+  Future<void> _scanMovie() async {
+    setState(() {
+      _busy = true;
+      _lastError = null;
+    });
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: _videoExtensions,
+        dialogTitle: 'Select a movie to scan for Family Mode',
+      );
+      if (result == null || result.files.isEmpty) return;
+      final path = result.files.single.path;
+      if (path == null) throw const FormatException('No file path returned.');
+      await _runScanAndPlay(path);
+    } catch (e) {
+      if (mounted) setState(() => _lastError = e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Runs the scanner for [path], shows the progress dialog and plays the
+  /// movie with the resulting segments once the scan completes.
+  Future<void> _runScanAndPlay(String path) async {
+    // The future is owned here so "Run in Background" can dismiss the dialog
+    // yet still resolve to a result later.
+    final scanFuture = _scanner.scan(path);
+    final reason = await ScanDialogWidget.show(
+      context,
+      scanner: _scanner,
+      inputPath: path,
+      scanFuture: scanFuture,
+    );
+    if (!mounted) return;
+
+    switch (reason) {
+      case ScanDialogCloseReason.cancelled:
+        return; // User bailed; keep the video unplayed.
+      case ScanDialogCloseReason.completed:
+      case ScanDialogCloseReason.background:
+        if (reason == ScanDialogCloseReason.background && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Scanning in the background — opening the '
+                'movie will resume once it finishes.',
+              ),
+            ),
+          );
+        }
+        final scanResult = await scanFuture;
+        if (!mounted) return;
+        await _startPlayback(path, scanResult.segments);
+    }
   }
 
   /// Builds a [SafePlayerController] from [segments], navigates to the player
@@ -248,6 +282,21 @@ class _HomePageState extends State<HomePage> {
                         vertical: 16,
                       ),
                       textStyle: const TextStyle(fontSize: 16),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _scanMovie,
+                    icon: const Icon(Icons.auto_awesome),
+                    label: const Text('Scan & Protect a Movie'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF7DD3FC),
+                      side: const BorderSide(color: Color(0xFF7DD3FC)),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 14,
+                      ),
+                      textStyle: const TextStyle(fontSize: 15),
                     ),
                   ),
                   const SizedBox(height: 16),

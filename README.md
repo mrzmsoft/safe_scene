@@ -75,9 +75,9 @@ iscc.exe safe_scene_installer.iss   # → dist\SafeScene_Setup_v1.0.0.exe
 
 ## Usage
 
-1. Launch **Safe Scene** and pick **Open Video File**.
-2. If a matching `<name>.safe.json` exists it loads instantly.
-3. Otherwise choose *Auto-scan for Family Mode* — a progress dialog streams live counters ("Visual Scenes Flagged", "Profanities Flagged").
+1. Launch **Safe Scene**.
+2. **Open Video File** to play any movie — a matching `<name>.safe.json` loads its rules instantly; otherwise a *"Auto-scan for Family Mode?"* prompt appears.
+3. Or use the always-visible **Scan & Protect a Movie** button to scan any video you choose — a progress dialog streams live counters ("Visual Scenes Flagged", "Profanities Flagged") and the movie plays with the resulting rules when done.
 4. The player automatically skips/mutes flagged windows (with a fade mask on skips).
 5. Press `E` (PIN required) to open the Scene Editor: edit/delete segments, mark your own with `[`/`]` and save with `S`/`M`, fine-tune ±100 ms, preview.
 

@@ -55,6 +55,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+import wave
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -67,6 +70,19 @@ SAFETY_BUFFER_S = 0.750            # 750 ms, per spec
 MERGE_WINDOW_S = 2.5               # merge gap, per spec
 VISUAL_THRESHOLD = 0.65            # confidence gate, per spec
 DEFAULT_CHUNK = 1 << 20            # 1 MiB, for hashing
+
+# Wall-clock budgets for the long-running child-process stages. They prevent a
+# slow or wedged tool from making the whole scan look frozen at one percentage:
+# every stage streams live progress (so the bar moves every few seconds) and is
+# killed once it exceeds its budget so the scan can always finish.
+AUDIO_EXTRACT_RTF = 2.0           # ffmpeg WAV extraction assumed to run >= this x realtime
+AUDIO_EXTRACT_BUDGET_MIN = 120.0  # seconds (absolute floor for short clips)
+FRAME_EXTRACT_BUDGET_MIN = 180.0  # seconds (absolute floor for frame extraction)
+WHISPER_MIN_RTF = 3.0             # whisper.cpp assumed to transcribe >= this x realtime
+WHISPER_EST_RTF = 10.0            # optimistic throughput used for the live estimate
+WHISPER_STARTUP_S = 20.0          # model load / warm-up allowance in the estimate
+WHISPER_BUDGET_MIN = 120.0        # seconds
+HEARTBEAT_S = 5.0                 # keep the UI alive even before first real progress
 
 # NudeNet classifier label order (used when labels.json is absent).
 CLASSIFIER_DEFAULT_LABELS = ["DRAWING", "HENTAI", "NEUTRAL", "PORN", "SEXY"]
@@ -167,6 +183,107 @@ def run_cmd(argv: list, **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("encoding", "utf-8")
     kwargs.setdefault("errors", "replace")
     return subprocess.run(argv, **kwargs)
+
+
+def _run_streamed(argv: list, on_line=None, timeout_s=None, tail_cap=40):
+    """
+    Run a child process while streaming its line-delimited stdout/stderr.
+
+    ``on_line(text)`` is invoked for every decoded line (both streams are fed
+    in---diagnostics live on stderr). A ``timeout_s`` bounds the whole call:
+    on expiry the child is killed and ``None`` is returned as the exit code so
+    callers can degrade gracefully instead of wedging the scan.
+
+    Returns ``(returncode, tail)`` where ``tail`` is the most recent lines
+    (kept for diagnostics). Reads both pipes from daemon threads, so a chatty
+    child can never deadlock the parent.
+    """
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            creationflags=flags,
+        )
+    except OSError as exc:
+        _log(f"Could not launch {argv[0]!r}: {exc}")
+        return None, []
+
+    tail = []
+
+    def _pump(stream):
+        try:
+            for raw in iter(stream.readline, b""):
+                text = raw.decode("utf-8", "replace").rstrip("\r\n")
+                if not text:
+                    continue
+                tail.append(text)
+                if len(tail) > tail_cap:
+                    del tail[0]
+                if on_line:
+                    try:
+                        on_line(text)
+                    except Exception:  # noqa: BLE001
+                        pass
+        finally:
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    threads = [
+        threading.Thread(target=_pump, args=(proc.stdout,), daemon=True),
+        threading.Thread(target=_pump, args=(proc.stderr,), daemon=True),
+    ]
+    for t in threads:
+        t.start()
+
+    try:
+        proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        _log(f"{argv[0]!r} exceeded its {timeout_s:.0f}s time budget; killing it.")
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+    except Exception:  # noqa: BLE001
+        proc.kill()
+    for t in threads:
+        t.join(timeout=5)
+    return proc.returncode, tail
+
+
+def _ffmpeg_progress_fraction(line: str, state: dict, duration_s: float) -> float | None:
+    """
+    Parse one ``... -progress pipe:1`` line; return a 0..1 completion fraction
+    for the current ffmpeg run, or None when the line carries no timing info.
+    ``state`` is the caller-owned key->value map ffmpeg builds across lines.
+    """
+    key, _, value = line.partition("=")
+    if value:
+        state[key.strip()] = value.strip()
+    if duration_s <= 0.0:
+        return None
+    if state.get("out_time_us", "").lstrip("+-").isdigit():
+        return max(0.0, min(1.0,
+                            int(state["out_time_us"]) / (max(duration_s, 1.0) * 1_000_000.0)))
+    if state.get("out_time_ms", "").lstrip("+-").isdigit():
+        return max(0.0, min(1.0,
+                            int(state["out_time_ms"]) / (max(duration_s, 1.0) * 1000.0)))
+    return None
+
+
+def _wav_duration_sec(path: str) -> float:
+    """Best-effort WAV duration via the stdlib ``wave`` module (0.0 on any error)."""
+    try:
+        with wave.open(path, "rb") as wf:
+            rate = wf.getframerate() or AUDIO_SAMPLE_RATE
+            return wf.getnframes() / float(rate)
+    except Exception:  # noqa: BLE001
+        return 0.0
 # ---------------------------------------------------------------------------
 # Media utilities (duration + SHA-256)
 # ---------------------------------------------------------------------------
@@ -266,30 +383,53 @@ def is_profanity(word: str, dictionary: set) -> bool:
 # ---------------------------------------------------------------------------
 # Audio analysis
 # ---------------------------------------------------------------------------
-def extract_audio(ffmpeg: str, video: str, wav_path: str) -> bool:
+def extract_audio(ffmpeg: str, video: str, wav_path: str,
+                  duration_s: float = 0.0, on_progress=None) -> bool:
     """
     ffmpeg -> 16 kHz mono PCM S16LE WAV (per spec):
         ffmpeg -i <input> -vn -ar 16000 -ac 1 -c:a pcm_s16le <wav>
-    Returns True on success.
+    Streams ffmpeg's ``-progress pipe:1`` output so ``on_progress(0..1)`` is
+    called while extraction runs, and enforces a wall-clock budget so the scan
+    can never wedge on a slow/corrupt file.  Returns True on success.
     """
+    budget_s = min(3600.0, max(AUDIO_EXTRACT_BUDGET_MIN,
+                               duration_s * AUDIO_EXTRACT_RTF))
+    start_t = time.monotonic()
+    last = 0.0
+    state: dict = {}
+
+    def on_line(line: str) -> None:
+        nonlocal last
+        if not on_progress:
+            return
+        frac = _ffmpeg_progress_fraction(line, state, duration_s)
+        if frac is None:
+            # No timing info yet (orphaned/duplicated stream, ffprobe-less
+            # duration); nudge forward by wall clock so the bar is never frozen.
+            frac = min(1.0, (time.monotonic() - start_t) / 30.0)
+        frac = min(1.0, frac)
+        if frac - last >= 0.01:
+            last = frac
+            on_progress(frac)
+
     cmd = [
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-nostats", "-progress", "pipe:1",
         "-i", video,
         "-vn", "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "1",
         "-c:a", "pcm_s16le", wav_path,
     ]
-    try:
-        proc = run_cmd(cmd, capture_output=True)
-        if proc.returncode != 0:
-            _log(f"Audio extraction failed: {proc.stderr.strip()}")
-            return False
-        if not os.path.isfile(wav_path) or os.path.getsize(wav_path) == 0:
-            _log("Audio extraction produced an empty file.")
-            return False
-        return True
-    except Exception as exc:  # noqa: BLE001
-        _log(f"Could not run ffmpeg for audio: {exc}")
+    returncode, tail = _run_streamed(cmd, on_line=on_line, timeout_s=budget_s)
+    if returncode is None:
+        _log(f"Audio extraction timed out after {budget_s:.0f}s; audio analysis skipped.")
         return False
+    if returncode != 0:
+        _log(f"Audio extraction failed: {tail[-3] if len(tail) > 2 else ' '.join(tail)}")
+        return False
+    if not os.path.isfile(wav_path) or os.path.getsize(wav_path) == 0:
+        _log("Audio extraction produced an empty file.")
+        return False
+    return True
 
 
 def transcribe_faster_whisper(model_dir: str | None, wav_path: str, model_path: str):
@@ -314,24 +454,79 @@ def transcribe_faster_whisper(model_dir: str | None, wav_path: str, model_path: 
     return words
 
 
-def transcribe_whisper_cpp(cli_path, model_path, wav_path, threads=None):
+def transcribe_whisper_cpp(cli_path, model_path, wav_path, threads=None,
+                           progress=None):
     """
     whisper.cpp subprocess backend: runs the CLI with full JSON output and
     parses word-level timestamps when present; otherwise distributes each
     segment's text evenly across its time window to approximate timestamps.
     Returns a list of (word, start_s, end_s) tuples.
+
+    The runner adds ``-pp`` (print progress) so whisper.cpp's per-batch
+    percentage can be parsed from stderr and streamed to ``progress(pct)`` in
+    real time (verified: the callback writes to stderr even when redirected).
+    A wall-clock budget derived from the WAV length bounds the call, so a
+    wedged binary degrades to "audio skipped" instead of freezing the scan at
+    5%. A heartbeat keeps ``progress`` moving until the first real percent.
     """
+    progress = progress or (lambda _f: None)
+
+    wav_dur = _wav_duration_sec(wav_path)
+    budget_s = float(max(WHISPER_BUDGET_MIN, wav_dur / WHISPER_MIN_RTF))
+    # Expected wall time used only to animate the pre-first-percent window;
+    # real `progress = N%` lines from the CLI replace it as soon as they land.
+    est_total = float(max(1.0, wav_dur / WHISPER_EST_RTF + WHISPER_STARTUP_S))
+
     json_base = os.path.splitext(wav_path)[0] + "_whisper"
     cmd = [
         cli_path, "-m", model_path, "-f", wav_path,
         "-ojf", "-of", json_base,   # -ojf => token-level timestamps
-        "-l", "auto", "-np",
+        "-l", "auto", "-np", "-pp", # -pp => live progress lines on stderr
     ]
     if threads and threads > 0:
         cmd += ["-t", str(threads)]
-    proc = run_cmd(cmd, capture_output=True)
-    if proc.returncode != 0:
-        _log(f"whisper.cpp failed: {proc.stderr.strip() or proc.stdout.strip()}")
+
+    start_t = time.monotonic()
+    reported = [0.0]
+
+    def _emit(pct):
+        pct = max(0.0, min(0.9, pct))
+        if pct > reported[0]:
+            reported[0] = pct
+            progress(pct)
+
+    def on_line(line: str) -> None:
+        m = re.search(r"progress\s*=\s*(\d{1,3})\s*%", line)
+        if m:
+            _emit(int(m.group(1)) / 100.0)
+
+    stop_hb = threading.Event()
+
+    def _heartbeat() -> None:
+        # whisper.cpp only prints progress when a batch completes; until then
+        # (and if a different build skips -pp) move the estimate so the bar
+        # never appears frozen.
+        while not stop_hb.is_set():
+            if stop_hb.wait(HEARTBEAT_S):
+                break
+            elapsed = time.monotonic() - start_t
+            estimate = min(elapsed / est_total, elapsed / budget_s, 0.7)
+            if estimate > reported[0]:
+                _emit(estimate)
+
+    hb = threading.Thread(target=_heartbeat, daemon=True)
+    hb.start()
+    try:
+        returncode, tail = _run_streamed(cmd, on_line=on_line, timeout_s=budget_s)
+    finally:
+        stop_hb.set()
+        hb.join(timeout=1)
+
+    if returncode is None:
+        _log(f"whisper.cpp timed out after {budget_s:.0f}s; audio analysis skipped.")
+        return []
+    if returncode != 0:
+        _log(f"whisper.cpp failed: {tail[-3] if len(tail) > 2 else ' '.join(tail)}")
         return []
 
     json_path = json_base + ".json"
@@ -429,20 +624,27 @@ def _distribute_words(text: str, t1: float, t2: float, out: list) -> None:
 
 
 def run_audio_analysis(ffmpeg, video, tmpdir, models_dir, whisper_cpp,
-                       threads=None):
+                       threads=None, progress=None, duration_s=0.0):
     """
     Returns a list of raw mute segments [(start_s, end_s, word)] discovered by
     transcribing the audio and matching words against the profanity dictionary.
+
+    ``progress(fraction)`` receives the *overall* completion fraction for this
+    stage (5%..40% of the whole scan) so the UI never sits frozen at 5%.
     """
+    report = progress or _progress
     dictionary = load_profanity(models_dir)
     hits = []
 
     wav_path = os.path.join(tmpdir, "temp_audio.wav")
-    if not extract_audio(ffmpeg, video, wav_path):
+    if not extract_audio(ffmpeg, video, wav_path, duration_s=duration_s,
+                         on_progress=lambda f: report(0.05 + 0.07 * f)):
         _log("Skipping audio analysis (could not extract audio).")
         return hits
+    report(0.12)
 
-    transcription = _transcribe(wav_path, models_dir, whisper_cpp, threads=threads)
+    transcription = _transcribe(wav_path, models_dir, whisper_cpp, threads=threads,
+                                progress=lambda f: report(0.12 + 0.26 * f))
     for word, start, end in transcription:
         if is_profanity(word, dictionary):
             hits.append((start, end, word))
@@ -452,13 +654,13 @@ def run_audio_analysis(ffmpeg, video, tmpdir, models_dir, whisper_cpp,
     return hits
 
 
-def _transcribe(wav_path, models_dir, whisper_cpp, threads=None):
+def _transcribe(wav_path, models_dir, whisper_cpp, threads=None, progress=None):
     """Prefer the bundled whisper.cpp CLI (the roadmap audio engine), falling
     back to faster-whisper (which requires a CTranslate2-format model)."""
     model_file = find_file("ggml-base.bin", models_dir)
     if whisper_cpp and model_file:
         return transcribe_whisper_cpp(
-            whisper_cpp, model_file, wav_path, threads=threads)
+            whisper_cpp, model_file, wav_path, threads=threads, progress=progress)
     try:
         return transcribe_faster_whisper(models_dir, wav_path, model_file or "")
     except Exception as exc:  # noqa: BLE001
@@ -468,25 +670,47 @@ def _transcribe(wav_path, models_dir, whisper_cpp, threads=None):
 # ---------------------------------------------------------------------------
 # Visual analysis
 # ---------------------------------------------------------------------------
-def extract_frames(ffmpeg: str, video: str, frames_dir: str) -> list:
+def extract_frames(ffmpeg: str, video: str, frames_dir: str,
+                   duration_s: float = 0.0, on_progress=None) -> list:
     """
     ffmpeg -> 1.5 FPS JPEG frames (per spec):
         ffmpeg -i <input> -vf "fps=1.5" -q:v 2 temp_frames/frame_%06d.jpg
+    Streams live completion through ``on_progress(0..1)`` and enforces a
+    wall-clock budget so a slow/corrupt file cannot wedge the scan.
     Returns the sorted list of extracted frame paths (oldest first).
     """
     os.makedirs(frames_dir, exist_ok=True)
     pattern = os.path.join(frames_dir, "frame_%06d.jpg")
+
+    budget_s = min(3600.0, max(FRAME_EXTRACT_BUDGET_MIN,
+                               duration_s * AUDIO_EXTRACT_RTF))
+    start_t = time.monotonic()
+    last = 0.0
+    state: dict = {}
+
+    def on_line(line: str) -> None:
+        nonlocal last
+        if not on_progress:
+            return
+        frac = _ffmpeg_progress_fraction(line, state, duration_s)
+        if frac is None:
+            frac = min(1.0, (time.monotonic() - start_t) / 30.0)
+        frac = min(1.0, frac)
+        if frac - last >= 0.01:
+            last = frac
+            on_progress(frac)
+
     cmd = [
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-nostats", "-progress", "pipe:1",
         "-i", video,
         "-vf", f"fps={FRAME_FPS}", "-q:v", "2", pattern,
     ]
-    try:
-        proc = run_cmd(cmd, capture_output=True)
-        if proc.returncode != 0:
-            _log(f"Frame extraction failed: {proc.stderr.strip()}")
-    except Exception as exc:  # noqa: BLE001
-        _log(f"Could not run ffmpeg for frames: {exc}")
+    returncode, tail = _run_streamed(cmd, on_line=on_line, timeout_s=budget_s)
+    if returncode is None:
+        _log(f"Frame extraction timed out after {budget_s:.0f}s; using partial frames.")
+    elif returncode != 0:
+        _log(f"Frame extraction failed: {tail[-3] if len(tail) > 2 else ' '.join(tail)}")
 
     frames = sorted(
         p for p in _walk_frames(frames_dir)
@@ -719,12 +943,18 @@ def _interpret_classifier(outs, labels, threshold, safe_idx):
 
 
 def run_visual_analysis(ffmpeg, video, tmpdir, models_dir, frames,
-                        providers_req=None, threads=None):
+                        providers_req=None, threads=None,
+                        progress=None, progress_floor=0.42):
     """
     Return a list of raw skip segments
     [(start_s, end_s, confidence, label)] for frames whose NSFW confidence
     exceeds VISUAL_THRESHOLD.
+
+    ``progress(fraction)`` receives the *overall* completion fraction while the
+    inference loop runs (starting at ``progress_floor``, ending at 95%), so the
+    animation hand-off from frame extraction is seamless.
     """
+    report = progress or _progress
     onnx_path = find_file("nudenet.onnx", models_dir)
     if not onnx_path:
         _log("No nudenet.onnx model found; visual analysis skipped.")
@@ -774,7 +1004,7 @@ def run_visual_analysis(ffmpeg, video, tmpdir, models_dir, frames,
             hits.append((start, end, conf, label))
 
         if i % 20 == 0:
-            _progress(0.42 + 0.52 * (i + 1) / total)
+            report(progress_floor + (0.95 - progress_floor) * (i + 1) / total)
 
     _log(f"Visual: {len(hits)} flagged frames of {total}.")
     return hits
@@ -968,7 +1198,7 @@ def run_scan(args) -> int:
             _progress(0.05)
             mute_hits = run_audio_analysis(
                 ffmpeg, input_path, tmp, args.models_dir, whisper_cpp,
-                threads=args.threads)
+                threads=args.threads, progress=_progress, duration_s=duration_s)
             _progress(0.40)
         else:
             _progress(0.40)
@@ -976,11 +1206,13 @@ def run_scan(args) -> int:
         # ---- Visual analysis ----
         skip_hits = []
         if ffmpeg:
-            frames = extract_frames(ffmpeg, input_path, os.path.join(tmp, "frames"))
-            _progress(0.42)
+            frames = extract_frames(ffmpeg, input_path, os.path.join(tmp, "frames"),
+                                    duration_s=duration_s,
+                                    on_progress=lambda f: _progress(0.42 + 0.05 * f))
             skip_hits = run_visual_analysis(
                 ffmpeg, input_path, tmp, args.models_dir, frames,
-                providers_req=args.provider, threads=args.threads)
+                providers_req=args.provider, threads=args.threads,
+                progress=_progress, progress_floor=0.52)
             _progress(0.95)
         else:
             _progress(0.95)
