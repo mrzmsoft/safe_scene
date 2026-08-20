@@ -66,17 +66,24 @@ Copy-Item dist\scanner_engine.exe assets\bin\
 ```
 The `whisper-cli.exe` comes from the official [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases) (`whisper-bin-x64.zip`).
 
-### Visual ensemble (reduce false alerts & missed scenes)
+### Visual ensemble — enabled by default (fewer false alerts & missed scenes)
 
-The visual detector is **model-agnostic**: the scanner auto-detects any ONNX model you drop next to `nudenet.onnx` as either a YOLO-style detector or a softmax classifier. With **two or more** models present, the engine **fuses their per-frame votes** and **smooths them across neighbouring samples**, which removes most single-model false alerts (like a "SEXY" swimwear/romance frame) while a high-confidence (≥ 0.95) second vote recovers scenes one model under-detects.
-
-To enable it, place a second offline model (e.g. a YOLOv8-NSFW ONNX export) into the models folder next to `nudenet.onnx`, then copy the bundled example into place:
+The visual detector is **model-agnostic**: the scanner auto-detects any ONNX model you drop next to `nudenet.onnx` as either a YOLO-style detector or a softmax classifier. The active `assets/models/visual_models.json` (already shipped, no setup required) registers the second detector `yolo_nsfw.onnx`:
 
 ```powershell
-Copy-Item assets\models\visual_models.example.json assets\models\visual_models.json
+# Drop a second offline NSFW model into the models folder. It must be exported
+# to ONNX (e.g. a YOLOv8-NSFW / YOLO-NSFW export). Name it exactly:
+Copy-Item "path\to\yolo_nsfw.onnx" assets\models\yolo_nsfw.onnx
 ```
 
-The config sets a per-model `threshold` (and optional per-model `labels` file), the fusion `rule` (`consensus` default, or `all` / `any` / `majority`), the `confirm_confidence` / `hard_confidence` tiers, and the temporal `vote_window` / `min_votes` smoothing. Missing models are skipped, so a lone `nudenet.onnx` behaves exactly as before. Visual sampling is now **2.0 FPS** (was 1.5) to close the gaps that caused missed scenes.
+With **two or more** models present, the engine **fuses their per-frame votes** and **smooths them across neighbouring samples**: an isolated single-model "SEXY"/swimwear/romance frame is never turned into a skip, while a very strong (≥ `hard_confidence` 0.95) vote still recovers scenes one model under-detects.
+
+Two things changed vs. the original build to cut the "few seconds mistaken as a scene" problem you saw:
+
+1. **Temporal smoothing now also guards the single-model path.** Before you add the second model, an *isolated* single-frame flicker is dropped instead of becoming a skip — only frames that are confirmed by a neighbouring sample (within `vote_window`) survive.
+2. **The shipped config requires a stronger single-vote bar** (`confirm_confidence` 0.80) unless the models agree, so a lone weak 0.65–0.80 vote is suppressed.
+
+Visual sampling is **3.0 FPS** (was 1.5, then 2.0) so that 3× the frames close the gaps that caused missed brief cuts, and the safety buffer is **1.0 s** around every flagged window. The config keys let you tune per-model `threshold`, per-model `labels`, the fusion `rule` (`consensus` default, or `all` / `any` / `majority`), the two confidence tiers, and the temporal `vote_window` / `min_votes`. Missing models are skipped safely.
 
 ### Installer (Inno Setup)
 ```powershell

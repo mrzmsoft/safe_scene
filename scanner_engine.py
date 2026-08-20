@@ -79,12 +79,12 @@ MERGE_WINDOW_S = 2.5               # merge gap, per spec
 VISUAL_THRESHOLD = 0.65            # default per-model confidence gate, per spec
 DEFAULT_CHUNK = 1 << 20            # 1 MiB, for hashing
 
-# Visual ensemble (opt-in). When a *second* ONNX model is present in the models
-# dir -- or a ``visual_models.json`` config file lists 2+ models -- the
-# per-frame votes of every model are fused (see _frame_confirm) and then
-# smoothed across neighbouring sample frames (see _temporal_confirm) so a
-# single-model flicker can no longer become a skip segment. A lone model keeps
-# the legacy behaviour exactly.
+# Visual ensemble (shipped active by default via visual_models.json). When a
+# *second* ONNX model is present, per-frame votes of every model are fused
+# (see _frame_confirm) and then smoothed across neighbouring sample frames
+# (see _temporal_confirm), so a single-model "sexy/swimwear/romance" flicker
+# can no longer become a skip segment. With only one model, per-frame votes
+# are still temporally smoothed (isolated single-frame glitches are dropped).
 VISUAL_CONFIG_NAME = "visual_models.json"
 VISUAL_AUTO_PATTERNS = ("nudenet", "nsfw", "nude", "yolo", "explicit", "adult")
 DEFAULT_RULE = "consensus"             # all | any | majority | consensus
@@ -1435,13 +1435,22 @@ def run_visual_analysis(ffmpeg, video, tmpdir, models_dir, frames,
            * min(1.0, processed / max(1, total * len(models))))
 
     if not ensemble:
+        # Single-model path: also apply temporal smoothing so an *isolated*
+        # single-frame flicker (the classic cause of a "few seconds mistaken
+        # as detection") is dropped instead of becoming a skip segment.
+        flagged = [
+            (i, vote_grid[0][i][0], vote_grid[0][i][1])
+            for i in range(total) if vote_grid[0][i][0] > 0.0
+        ]
+        kept = set(_temporal_confirm([i for i, _c, _l in flagged],
+                                     window=cfg["vote_window"],
+                                     min_votes=cfg["min_votes"]))
         hits = [
             (i / FRAME_FPS, (i + 1) / FRAME_FPS, conf, label)
-            for i in range(total)
-            for conf, label in [vote_grid[0][i]]
-            if conf > 0.0
+            for i, conf, label in flagged if i in kept
         ]
-        _log(f"Visual: {len(hits)} flagged frames of {total}.")
+        _log(f"Visual: {len(hits)} flagged frames of {total} "
+             f"(single-model, temporal-smoothed).")
         return hits
 
     # ---- ensemble: per-frame fusion + temporal confirmation ----------------

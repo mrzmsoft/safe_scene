@@ -137,6 +137,20 @@ def test_config_override_path():
     print("  ok  config override path")
 
 
+def test_shipped_visual_config():
+    """The active visual_models.json ships with the second model registered so
+    cross-model confirmation activates the moment the user drops the .onnx in."""
+    models_dir = os.path.join(_ROOT, "assets", "models")
+    cfg = se.load_visual_config(models_dir)
+    assert cfg["rule"] == "consensus"
+    assert isinstance(cfg["confirm_confidence"], float)
+    assert isinstance(cfg["hard_confidence"], float)
+    files = [str(m.get("file")) for m in cfg["models"]]
+    assert "nudenet.onnx" in files, files
+    assert "yolo_nsfw.onnx" in files, files
+    print("  ok  shipped visual config")
+
+
 def main():
     se._log = lambda *a, **k: None  # silence discovery "not found" warnings
     tests = [
@@ -146,6 +160,7 @@ def main():
         test_best_label,
         test_discovery_and_resolve,
         test_config_override_path,
+        test_shipped_visual_config,
     ]
     failures = 0
     for fn in tests:
