@@ -69,10 +69,12 @@ from typing import Any
 # ---------------------------------------------------------------------------
 VERSION = "1.0.1"
 AUDIO_SAMPLE_RATE = 16000          # Hz, per spec
-FRAME_FPS = 2.0                    # frames per second. 2.0 FPS (was 1.5) closes
-                                   # sampling gaps so brief explicit cuts are far
-                                   # less likely to slip between two sample frames.
-SAFETY_BUFFER_S = 0.750            # 750 ms, per spec
+FRAME_FPS = 3.0                    # frames per second. Raised to 3.0 FPS so a brief
+                                   # explicit cut is far less likely to slip between
+                                   # two sample frames (the width of the gap halves).
+                                   # Lower toward 1.5 to cut scan time if needed.
+SAFETY_BUFFER_S = 1.0              # 1000 ms buffer pad around each flagged window,
+                                   # per spec (raised from 750 ms for a wider margin).
 MERGE_WINDOW_S = 2.5               # merge gap, per spec
 VISUAL_THRESHOLD = 0.65            # default per-model confidence gate, per spec
 DEFAULT_CHUNK = 1 << 20            # 1 MiB, for hashing
@@ -135,8 +137,10 @@ def _is_explicit_label(label) -> bool:
 # Default profanity dictionary (offline).  Overridable via profanity.txt in the
 # models directory (one token per line, ``#`` starts a comment).
 DEFAULT_PROFANITY = {
-    # Intentionally kept conservative; the matcher also treats any long token
-    # (>= 4 chars) as a substring stem ("fuck" also hits "fucking"/"fucked").
+    # A family filter's safe failure mode is *over*-muting, never letting
+    # profanity through. The matcher also treats any long token (>= 4 chars)
+    # as a substring stem ("fuck" also hits "fucking"/"fucked") and understands
+    # censored/split spellings ("f*ck", "f u c k") via _candidate_forms().
     "anus", "arse", "ass", "asshole", "bitch", "bitchass", "bitches",
     "blowjob", "bollocks", "boner", "boob", "bullshit", "butthole", "clit",
     "clitoris", "cock", "cocksucker", "coon", "crap", "cum", "cunt", "damn",
@@ -149,6 +153,14 @@ DEFAULT_PROFANITY = {
     "rape", "rapist", "retard", "rimjob", "scrotum", "shit", "shitass",
     "shitbag", "shithead", "sperm", "spic", "spunk", "tits", "tit", "titty",
     "turd", "twat", "vagina", "vulva", "wank", "whore", "wtf",
+    # --- Expanded Family-Safe coverage (v1.1) ---
+    "arsehole", "asshat", "assholes", "asswipes", "bastard", "bastards",
+    "bitchy", "blowjobs", "boobies", "boobs", "bullcrap", "buttfuck",
+    "cockface", "cocks", "cumshot", "dammit", "damnation", "dickwad",
+    "dildoes", "dipshit", "douche", "douchebag", "dumbasses", "dumbshit",
+    "fuckboy", "fuckface", "fucks", "goddammit", "gook", "hell", "hellhole",
+    "handjobs", "motherfucker", "motherfucking", "penis", "pissing",
+    "pissedoff", "slut", "sluts", "slutty", "smegma", "wanker", "wanking",
 }
 # make sure lower-case + strip blank lines from the literal set
 DEFAULT_PROFANITY = {w.strip().lower() for w in DEFAULT_PROFANITY if w.strip()}
@@ -377,6 +389,13 @@ _LEET = str.maketrans({
     "5": "s", "$": "s", "7": "t", "9": "g", "2": "z",
 })
 
+# Characters censors use *inside* a word to hide letters. They match any
+# letters (so "f*ck"/"f**k" collapse toward "fuck", "darn" still matches too).
+_WILDCARD_CHARS = "*?~"
+# Normalise a token to letters/wildcards only (drops spaces, dots, dashes, …).
+_COMPACT_RE = re.compile(rf"[^a-z{_WILDCARD_CHARS}]")
+_WILDCARD_EXPAND_LIMIT = 2  # cap placeholders per token to keep matching bounded
+
 
 def load_profanity(models_dir: str | None) -> set:
     """Load tokens from profanity.txt if present, else the embedded default."""
@@ -398,25 +417,72 @@ def load_profanity(models_dir: str | None) -> set:
 
 
 def clean_word(raw: str) -> str:
-    """Lower-case, map leetspeak, strip everything that is not a-z."""
+    """Lowercase, map leetspeak, strip everything that is not a-z."""
     w = raw.lower().translate(_LEET)
     return re.sub(r"[^a-z]", "", w)
 
 
+def _candidate_forms(raw: str) -> list:
+    """Return normalized letter-only keys used to match the profanity set.
+
+    Besides ``clean_word`` this understands censored/split spellings:
+
+      * Separators between letters are dropped, so ``f u c k``, ``f.u.c.k``
+        and ``f-u-c-k`` all collapse to ``fuck``.
+      * ``*`` / ``?`` / ``~`` inside a token act as wildcards that may stand
+        for *any* letters, so ``f*ck`` also yields ``fuck``/``fick`` and so on.
+        Expansion is capped so the candidate count stays bounded.
+    """
+    lowed = raw.lower().translate(_LEET)
+    compact = _COMPACT_RE.sub("", lowed)  # separators removed, wildcards kept
+    if not compact:
+        return []
+    if not any(c in _WILDCARD_CHARS for c in compact):
+        return [compact]
+    return _expand_wildcards(compact)
+
+
+def _expand_wildcards(token: str) -> list:
+    """Fill each wildcard with zero or one letter, bounded to avoid blow-up."""
+    if sum(1 for c in token if c in _WILDCARD_CHARS) > _WILDCARD_EXPAND_LIMIT:
+        return [re.sub(rf"[{_WILDCARD_CHARS}]", "", token)]
+    out: list = []
+    letters = "abcdefghijklmnopqrstuvwxyz"
+
+    def rec(buf: str, i: int) -> None:
+        if i == len(token):
+            out.append(buf)
+            return
+        ch = token[i]
+        if ch in _WILDCARD_CHARS:
+            rec(buf, i + 1)            # wildcard stands for nothing
+            for c in letters:          # ... or for one letter
+                rec(buf + c, i + 1)
+        else:
+            rec(buf + ch, i + 1)
+
+    rec("", 0)
+    return out
+
+
 def is_profanity(word: str, dictionary: set) -> bool:
     """
-    True when the cleaned word is a dictionary token or contains a long
+    True when some candidate form is a dictionary token or contains a long
     (>= 4 char) token as a stem.  Short tokens (e.g. "ass") are excluded from
-    substring matching so ordinary words like "class"/"pass" are not flagged,
-    while "fuck" still catches "fucking"/"fucked".
+    substring matching so ordinary words like "class"/"pass" are not flagged.
+    Stems only match when the candidate is at least two characters longer, so
+    expanded forms ("fuckhead", "helluva") are caught while innocuous words
+    that merely start with a token ("hello" -> "hell") are left alone.
     """
-    w = clean_word(word)
-    if not w:
+    if not word or not word.strip():
         return False
-    if w in dictionary:
-        return True
-    if any(t in w for t in dictionary if len(t) >= 4):
-        return True
+    stems = [t for t in dictionary if len(t) >= 4]
+    for cand in _candidate_forms(word):
+        if cand in dictionary:
+            return True
+        for stem in stems:
+            if len(cand) >= len(stem) + 2 and stem in cand:
+                return True
     return False
 # ---------------------------------------------------------------------------
 # Audio analysis
