@@ -1,0 +1,12 @@
+{
+  "comment": "ACTIVE visual ensemble config (Family-Safe, precision-tuned). NudeNet is the always-present first model. Drop a second NSFW ONNX file next to it and name it exactly yolo_nsfw.onnx (or edit 'file' below) to enable cross-model confirmation. With 2 models loaded, a frame is only SKIPPED when the models agree (consensus) OR one vote is very strong (>= hard_confidence), so a lone weak 'sexy/swimwear/romance' vote is never turned into a skip. Missing models are logged and skipped, so this file is safe to ship before the second model is present.",
+  "models": [
+    { "file": "nudenet.onnx", "threshold": 0.65 },
+    { "file": "yolo_nsfw.onnx", "threshold": 0.60 }
+  ],
+  "rule": "consensus",
+  "confirm_confidence": 0.80,
+  "hard_confidence": 0.95,
+  "vote_window": 2,
+  "min_votes": 2
+}

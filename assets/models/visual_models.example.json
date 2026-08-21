@@ -1,0 +1,12 @@
+{
+  "comment": "OPTIONAL visual ensemble config. Safe Scene runs every ONNX model listed here (2+ models enable per-frame vote fusion + temporal smoothing, which cuts false alerts and recovers missed scenes). Copy this file to 'visual_models.json' inside the models dir to activate it, then drop the matching .onnx files next to nudenet.onnx. Missing files are logged and skipped, so you can enable it before the second model is present.",
+  "models": [
+    { "file": "nudenet.onnx", "threshold": 0.65 },
+    { "file": "yolo_nsfw.onnx", "threshold": 0.60, "labels": "yolo_labels.json" }
+  ],
+  "rule": "consensus",
+  "confirm_confidence": 0.85,
+  "hard_confidence": 0.95,
+  "vote_window": 2,
+  "min_votes": 2
+}
