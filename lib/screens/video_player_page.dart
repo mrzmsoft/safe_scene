@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../controllers/safe_player_controller.dart';
 import '../models/filter_segment.dart';
+import '../theme/app_theme.dart';
 import '../widgets/safe_seek_bar.dart';
 import '../widgets/scene_editor_drawer.dart';
 
@@ -317,7 +318,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> with WindowListener {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AppColors.background,
       body: Focus(
         focusNode: _focusNode,
         autofocus: true,
@@ -457,7 +458,7 @@ class _BufferingIndicator extends StatelessWidget {
       child: SizedBox(
         width: 48,
         height: 48,
-        child: CircularProgressIndicator(color: Colors.white),
+        child: CircularProgressIndicator(),
       ),
     );
   }
@@ -488,10 +489,10 @@ class _TopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        color: Color(0xEE1B1B1B),
-        border: Border(bottom: BorderSide(color: Color(0xFF303030))),
+        gradient: AppGradients.scrimTop,
+        border: Border(bottom: BorderSide(color: Color(0x22FFFFFF))),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       child: Row(
         children: [
           _PotButton(
@@ -499,22 +500,38 @@ class _TopBar extends StatelessWidget {
             tooltip: 'Back',
             onPressed: onBack,
           ),
-          const SizedBox(width: 4),
-          const Icon(Icons.shield_outlined, color: Color(0xFF8DCAF8), size: 17),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
+          Container(
+            width: 26,
+            height: 26,
+            decoration: BoxDecoration(
+              gradient: AppGradients.brand,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.shield,
+              size: 16,
+              color: AppColors.onBrand,
+            ),
+          ),
+          const SizedBox(width: 8),
           const Text(
             'Safe Scene',
             style: TextStyle(
-              color: Color(0xFFE5E5E5),
-              fontSize: 12,
+              color: AppColors.textPrimary,
+              fontSize: 12.5,
               fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
             ),
           ),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 8),
             child: SizedBox(
               height: 16,
-              child: VerticalDivider(width: 1, color: Color(0xFF424242)),
+              child: VerticalDivider(
+                width: 1,
+                color: AppColors.borderFaint,
+              ),
             ),
           ),
           Expanded(
@@ -523,8 +540,8 @@ class _TopBar extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: Color(0xFFCFCFCF),
-                fontSize: 12,
+                color: AppColors.textSecondary,
+                fontSize: 12.5,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -556,27 +573,15 @@ class _ActiveFilterBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color color;
-    switch (segment.action) {
-      case FilterAction.skip:
-        color = Colors.redAccent;
-      case FilterAction.mute:
-        color = Colors.amber;
-      case FilterAction.blackout:
-        color = Colors.deepPurpleAccent;
-    }
-    final icon = switch (segment.action) {
-      FilterAction.skip => Icons.fast_forward,
-      FilterAction.mute => Icons.volume_off,
-      FilterAction.blackout => Icons.visibility_off,
-    };
+    final color = appActionColor(segment.action);
+    final icon = appActionIcon(segment.action);
     return Container(
       constraints: const BoxConstraints(maxWidth: 220),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.22),
-        border: Border.all(color: color.withValues(alpha: 0.65)),
-        borderRadius: BorderRadius.circular(3),
+        color: color.withValues(alpha: 0.18),
+        border: Border.all(color: color.withValues(alpha: 0.55)),
+        borderRadius: BorderRadius.circular(AppRadii.pill),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -588,7 +593,7 @@ class _ActiveFilterBadge extends StatelessWidget {
               segment.category,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: Color(0xFFE8E8E8),
+                color: AppColors.textPrimary,
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
               ),
@@ -623,17 +628,19 @@ class _PotButton extends StatelessWidget {
       message: tooltip,
       waitDuration: const Duration(milliseconds: 450),
       child: Material(
-        color: selected ? const Color(0xFF2B5F7C) : Colors.transparent,
+        color: selected
+            ? AppColors.brand.withValues(alpha: 0.24)
+            : Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(8),
           side: BorderSide(
-            color: selected ? const Color(0xFF4DA3D9) : Colors.transparent,
+            color: selected ? AppColors.brand.withValues(alpha: 0.65) : Colors.transparent,
           ),
         ),
         child: InkWell(
-          borderRadius: BorderRadius.circular(3),
-          hoverColor: const Color(0xFF343434),
-          splashColor: const Color(0xFF454545),
+          borderRadius: BorderRadius.circular(8),
+          hoverColor: Colors.white.withValues(alpha: 0.08),
+          splashColor: Colors.white.withValues(alpha: 0.12),
           onTap: onPressed,
           child: SizedBox(
             width: size,
@@ -641,7 +648,7 @@ class _PotButton extends StatelessWidget {
             child: Icon(
               icon,
               size: iconSize,
-              color: selected ? Colors.white : const Color(0xFFE6E6E6),
+              color: selected ? AppColors.brandSoft : AppColors.textPrimary,
             ),
           ),
         ),
@@ -661,16 +668,16 @@ class _TimeChip extends StatelessWidget {
     return Container(
       height: 26,
       alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF111111),
-        border: Border.all(color: const Color(0xFF333333)),
-        borderRadius: BorderRadius.circular(3),
+        color: AppColors.overlay.withValues(alpha: 0.8),
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(AppRadii.pill),
       ),
       child: Text(
         '${formatTimestamp(position)} / ${formatTimestamp(duration)}',
         style: const TextStyle(
-          color: Color(0xFFD8D8D8),
+          color: AppColors.textSecondary,
           fontSize: 12,
           fontFeatures: [FontFeature.tabularFigures()],
         ),
@@ -710,17 +717,11 @@ class _BottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xF21A1A1A),
+      color: Colors.transparent,
       child: Container(
         decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: Color(0xFF303030))),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black54,
-              offset: Offset(0, -2),
-              blurRadius: 8,
-            ),
-          ],
+          gradient: AppGradients.scrimBottom,
+          border: Border(top: BorderSide(color: Color(0x22FFFFFF))),
         ),
         padding: const EdgeInsets.fromLTRB(10, 6, 10, 7),
         child: Column(
@@ -771,29 +772,15 @@ class _BottomBar extends StatelessWidget {
                 const Spacer(),
                 Icon(
                   volume <= 0 ? Icons.volume_off : Icons.volume_up,
-                  color: const Color(0xFFD8D8D8),
+                  color: AppColors.textSecondary,
                   size: 18,
                 ),
                 SizedBox(
                   width: 118,
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 3,
-                      thumbShape: const RoundSliderThumbShape(
-                        enabledThumbRadius: 5,
-                      ),
-                      overlayShape: const RoundSliderOverlayShape(
-                        overlayRadius: 10,
-                      ),
-                      activeTrackColor: const Color(0xFF66B7E8),
-                      inactiveTrackColor: const Color(0xFF4A4A4A),
-                      thumbColor: const Color(0xFFE7E7E7),
-                    ),
-                    child: Slider(
-                      value: volume.clamp(0.0, 100.0),
-                      max: 100,
-                      onChanged: onVolume,
-                    ),
+                  child: Slider(
+                    value: volume.clamp(0.0, 100.0),
+                    max: 100,
+                    onChanged: onVolume,
                   ),
                 ),
                 SizedBox(
@@ -802,7 +789,7 @@ class _BottomBar extends StatelessWidget {
                     '${volume.round()}%',
                     textAlign: TextAlign.right,
                     style: const TextStyle(
-                      color: Color(0xFFCFCFCF),
+                      color: AppColors.textSecondary,
                       fontSize: 11,
                       fontFeatures: [FontFeature.tabularFigures()],
                     ),

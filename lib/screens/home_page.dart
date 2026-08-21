@@ -8,6 +8,7 @@ import 'package:media_kit/media_kit.dart';
 import '../controllers/safe_player_controller.dart';
 import '../models/filter_segment.dart';
 import '../services/scanner_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/scan_dialog.dart';
 import 'video_player_page.dart';
 
@@ -108,15 +109,10 @@ class _HomePageState extends State<HomePage> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0F172A),
-        title: const Text(
-          'Auto-scan for Family Mode?',
-          style: TextStyle(color: Colors.white),
-        ),
+        title: const Text('Auto-scan for Family Mode?'),
         content: const Text(
           'No filter rules were found for this movie. Would you like to '
           'auto-scan this movie for Family Mode?',
-          style: TextStyle(color: Colors.white70),
         ),
         actions: [
           TextButton(
@@ -225,108 +221,515 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
-          ),
-        ),
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(
-                    Icons.shield,
-                    size: 80,
-                    color: Colors.lightBlueAccent,
+      body: Stack(
+        children: [
+          const _AmbientBackdrop(),
+          LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 40,
+                    vertical: 28,
                   ),
-                  const SizedBox(height: 24),
-                  const Text(
-                    'Safe Scene',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 34,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'A local video player that automatically skips\n'
-                    'and mutes explicit scenes from timestamp rules.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white70, height: 1.5),
-                  ),
-                  const SizedBox(height: 32),
-                  FilledButton.icon(
-                    onPressed: _busy ? null : _openFile,
-                    icon: _busy
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1020),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const _BrandBar(),
+                          const SizedBox(height: 64),
+                          const _HeroCopy(),
+                          const SizedBox(height: 30),
+                          Center(
+                            child: _CtaRow(
+                              busy: _busy,
+                              onOpen: _openFile,
+                              onScan: _scanMovie,
                             ),
-                          )
-                        : const Icon(Icons.video_library),
-                    label: const Text('Open Video File'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 28,
-                        vertical: 16,
-                      ),
-                      textStyle: const TextStyle(fontSize: 16),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _scanMovie,
-                    icon: const Icon(Icons.auto_awesome),
-                    label: const Text('Scan & Protect a Movie'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF7DD3FC),
-                      side: const BorderSide(color: Color(0xFF7DD3FC)),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 14,
-                      ),
-                      textStyle: const TextStyle(fontSize: 15),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Tip: place a <name>.safe.json next to your video\n'
-                    'to auto-apply filter rules.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white38,
-                      fontSize: 12,
-                      height: 1.4,
-                    ),
-                  ),
-                  if (_lastError != null) ...[
-                    const SizedBox(height: 16),
-                    Text(
-                      _lastError!,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: theme.colorScheme.error,
-                        fontSize: 13,
+                          ),
+                          const SizedBox(height: 48),
+                          const _FeatureGrid(),
+                          const SizedBox(height: 36),
+                          const _FooterTip(),
+                          if (_lastError != null) ...[
+                            const SizedBox(height: 14),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.errorContainer
+                                    .withValues(alpha: 0.5),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: theme.colorScheme.error.withValues(
+                                    alpha: 0.4,
+                                  ),
+                                ),
+                              ),
+                              child: Text(
+                                _lastError!,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: theme.colorScheme.error,
+                                  fontSize: 12.5,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
-                  ],
-                ],
+                  ),
+                ),
               ),
             ),
           ),
-        ),
+        ],
       ),
+    );
+  }
+}
+/// Layered ambient backdrop: a deep base, two soft brand glows and a fine grid
+/// that gives the landing page its "instrument panel" texture.
+class _AmbientBackdrop extends StatelessWidget {
+  const _AmbientBackdrop();
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: AppColors.background),
+          Align(
+            alignment: Alignment.topRight,
+            child: Container(
+              width: 640,
+              height: 480,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  colors: [
+                    Color(0x3D3FC6F2),
+                    Color(0x123FC6F2),
+                    Colors.transparent,
+                  ],
+                  stops: [0.0, 0.55, 1.0],
+                ),
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.bottomLeft,
+            child: Container(
+              width: 620,
+              height: 460,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  colors: [
+                    Color(0x2E43E5C8),
+                    Color(0x0F43E5C8),
+                    Colors.transparent,
+                  ],
+                  stops: [0.0, 0.55, 1.0],
+                ),
+              ),
+            ),
+          ),
+          const CustomPaint(painter: _GridPainter()),
+        ],
+      ),
+    );
+  }
+}
+
+/// A fine, faint blueprint grid drawn across the backdrop.
+class _GridPainter extends CustomPainter {
+  const _GridPainter();
+
+  static const double _spacing = 72;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.028)
+      ..strokeWidth = 1;
+    final path = Path();
+    for (double x = 0; x <= size.width; x += _spacing) {
+      path.moveTo(x, 0);
+      path.lineTo(x, size.height);
+    }
+    for (double y = 0; y <= size.height; y += _spacing) {
+      path.moveTo(0, y);
+      path.lineTo(size.width, y);
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _GridPainter oldDelegate) => false;
+}
+/// Top strip: brand mark + wordmark on the left, privacy guarantee on the right.
+class _BrandBar extends StatelessWidget {
+  const _BrandBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            gradient: AppGradients.brand,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.brand.withValues(alpha: 0.35),
+                blurRadius: 18,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: const Icon(
+            Icons.shield,
+            size: 22,
+            color: AppColors.onBrand,
+          ),
+        ),
+        const SizedBox(width: 12),
+        const Text(
+          'Safe Scene',
+          style: TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.3,
+          ),
+        ),
+        const Spacer(),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceElevated.withValues(alpha: 0.7),
+            borderRadius: BorderRadius.circular(AppRadii.pill),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.lock_outline, size: 14, color: AppColors.accent),
+              SizedBox(width: 6),
+              Text(
+                'PRIVACY FIRST · 100% LOCAL',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.1,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+/// Centered hero headline + supporting copy.
+class _HeroCopy extends StatelessWidget {
+  const _HeroCopy();
+
+  @override
+  Widget build(BuildContext context) {
+    final display = Theme.of(context).textTheme.displaySmall;
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: AppColors.brand.withValues(alpha: 0.09),
+            borderRadius: BorderRadius.circular(AppRadii.pill),
+            border: Border.all(color: AppColors.brand.withValues(alpha: 0.4)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.auto_awesome, size: 13, color: AppColors.brandSoft),
+              SizedBox(width: 6),
+              Text(
+                'FAMILY-SAFE MOVIE PLAYER',
+                style: TextStyle(
+                  color: AppColors.brandSoft,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 22),
+        Text.rich(
+          TextSpan(
+            style: display,
+            children: [
+              const TextSpan(
+                text: 'Watch freely.\n',
+                style: TextStyle(color: AppColors.textPrimary),
+              ),
+              WidgetSpan(
+                alignment: PlaceholderAlignment.baseline,
+                baseline: TextBaseline.alphabetic,
+                child: ShaderMask(
+                  shaderCallback: (bounds) =>
+                      AppGradients.brandText.createShader(bounds),
+                  blendMode: BlendMode.srcATop,
+                  child: Text(
+                    'Content gets protected.',
+                    style: display,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 14),
+        ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 640),
+          child: Text(
+            'Open any local movie. Safe Scene automatically skips explicit '
+            'scenes, mutes profanity, and blackouts the rest — all with '
+            'on-device AI. Nothing ever leaves your machine.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 15.5,
+              height: 1.6,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+/// Primary + secondary call-to-action row.
+class _CtaRow extends StatelessWidget {
+  const _CtaRow({
+    required this.busy,
+    required this.onOpen,
+    required this.onScan,
+  });
+
+  final bool busy;
+  final VoidCallback onOpen;
+  final VoidCallback onScan;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 16,
+      runSpacing: 12,
+      alignment: WrapAlignment.center,
+      children: [
+        FilledButton.icon(
+          onPressed: busy ? null : onOpen,
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(224, 52),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppRadii.md),
+            ),
+            textStyle: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          icon: busy
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.video_library, size: 20),
+          label: const Text('Open Video File'),
+        ),
+        OutlinedButton.icon(
+          onPressed: busy ? null : onScan,
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size(224, 52),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppRadii.md),
+            ),
+            textStyle: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          icon: const Icon(Icons.auto_awesome, size: 18),
+          label: const Text('Scan & Protect a Movie'),
+        ),
+      ],
+    );
+  }
+}
+/// The four product pillars presented as glass feature cards.
+class _FeatureGrid extends StatelessWidget {
+  const _FeatureGrid();
+
+  static const List<_FeatureData> _features = [
+    _FeatureData(
+      icon: Icons.auto_awesome,
+      color: AppColors.brand,
+      title: 'Smart Scene Detection',
+      body: 'Dual-model AI flags explicit frames in real time and skips them '
+          'with a graceful fade.',
+    ),
+    _FeatureData(
+      icon: Icons.volume_off,
+      color: AppColors.mute,
+      title: 'Word-level Muting',
+      body: 'Whisper transcription silences coarse language — the picture '
+          'keeps playing.',
+    ),
+    _FeatureData(
+      icon: Icons.tune,
+      color: AppColors.blackout,
+      title: 'Scene Editor',
+      body: 'Review every flag and fine-tune start, end, and action down to '
+          'the millisecond.',
+    ),
+    _FeatureData(
+      icon: Icons.lock_outline,
+      color: AppColors.accent,
+      title: '100% Private',
+      body: 'Every scan runs on your machine. No cloud, no account, no '
+          'upload — ever.',
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 16,
+      runSpacing: 16,
+      alignment: WrapAlignment.center,
+      children: [for (final f in _features) _FeatureCard(data: f)],
+    );
+  }
+}
+
+class _FeatureData {
+  const _FeatureData({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.body,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String body;
+}
+
+/// A single glass card in the feature grid.
+class _FeatureCard extends StatelessWidget {
+  const _FeatureCard({required this.data});
+
+  final _FeatureData data;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 232,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainer.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+        border: Border.all(color: AppColors.border.withValues(alpha: 0.7)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.25),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  data.color.withValues(alpha: 0.30),
+                  data.color.withValues(alpha: 0.08),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: data.color.withValues(alpha: 0.45)),
+            ),
+            child: Icon(data.icon, size: 20, color: data.color),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            data.title,
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 14.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            data.body,
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: 12.5,
+              height: 1.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+/// The small context line under the feature grid.
+class _FooterTip extends StatelessWidget {
+  const _FooterTip();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(
+          Icons.lightbulb_outline,
+          size: 14,
+          color: AppColors.textFaint,
+        ),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            'Tip: place a <name>.safe.json next to your video to load '
+            'existing filter rules instantly.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppColors.textFaint,
+              fontSize: 12.5,
+              height: 1.4,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

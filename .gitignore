@@ -1,46 +1,59 @@
-# ============================================
-# SafeScene - Project-wide .gitignore
-# Tauri 2 + React + TypeScript + Python / Windows
-# ============================================
+# ==========================================
+# SafeScene - .gitignore
+# Flutter (Windows desktop) + local Python scanner sidecar
+# ==========================================
 
-# ---------- Node.js / React / TypeScript ----------
-node_modules/
-dist/
+# ---------- Flutter / Dart (core build + generated) ----------
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
 build/
-frontend/dist/
-frontend/build/
-frontend/.vite/
+coverage/
+*.g.dart
+*.freezed.dart
+*.mocks.dart
 
-# ---------- Tauri / Rust ----------
-src-tauri/target/
-src-tauri/gen/schemas/
-*.rs.bk
+# Flutter platform ephemeral build output (also covered by per-platform .gitignore)
+windows/flutter/ephemeral/
+linux/flutter/ephemeral/
+macos/flutter/ephemeral/
 
-# ---------- Python ----------
+# ---------- Bundled scanner tooling (built by Python sidecar) ----------
+dist/
+
+# ---------- Python (scanner_engine.py development) ----------
 # Virtual environments
 .venv/
 venv/
 env/
-ENV/
-python_env/
-py_env/
 
 # Python cache & bytecode
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
 .Python
 .python-version
 
-# Packaging / distribution
-build/
-dist/
+# Packaging
 *.egg-info/
 .eggs/
 *.egg
 wheelhouse/
 wheels/
+
+# Test / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.htmlcov/
+
+# ---------- Downloaded AI models (large binaries, not committed) ----------
+# Runtime models are fetched/placed in assets/models by the build process and
+# kept out of the repository to avoid committing hundreds of MB.
+assets/models/*.onnx
+assets/models/*.bin
+assets/models/*.gguf
+*.ct2/
 
 # ---------- IDE / Editor ----------
 # VS Code
@@ -50,7 +63,7 @@ wheels/
 !.vscode/tasks.json
 !.vscode/settings.json
 
-# JetBrains (PyCharm / IntelliJ / WebStorm)
+# JetBrains (IntelliJ / PyCharm / WebStorm)
 .idea/
 *.iml
 *.iws
@@ -58,21 +71,18 @@ wheels/
 out/
 
 # Other editors
-.vscode/
 *.swp
 *.swo
 *~
-.vim/
-.vscode-server/
 
-# ---------- OS / Windows ----------
+# ---------- OS ----------
 # Windows
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-# macOS (for future cross-platform support)
+# macOS
 .DS_Store
 .AppleDouble
 .LSOverride
@@ -82,88 +92,9 @@ $RECYCLE.BIN/
 *.~lock
 .directory
 
-# ---------- SQLite ----------
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-*.db-wal
-*.db-shm
-*.db-journal
-
-# Temporary SQLite files
-*.db-tmp
-*.db.bak
-*.db.old
-
-# ---------- Downloaded AI Models ----------
-# Model directories
-models/
-ai-models/
-engine/models/
-engine/ai-models/
-
-# Common model file extensions
-*.onnx
-*.bin
-*.gguf
-*.safetensors
-*.pth
-*.pt
-*.ckpt
-*.pb
-*.tflite
-*.h5
-*.hdf5
-*.pkl
-*.pickle
-*.joblib
-
-# Whisper models
-*.ct2/
-ct2/
-faster-whisper/
-engine/faster-whisper/
-
-# ---------- Generated Analysis / Cache Files ----------
-# Analysis output
-analysis/
-analysis-output/
-engine/analysis/
-engine/output/
-generated/
-
-# Media analysis cache
-.cache/
-*.cache
-engine/.cache/
-engine/tmp/
-tmp/
-*.tmp
-
-# FFmpeg temporary work files
-*.ffprobe.cache
-*.ffmetadata
-*.nut
-
-# GPU / runtime caches
-*.ptx
-*.cubin
-*.cuda_cache/
-.cuda_cache/
-
-# Thumbnails / previews
-*.thumbnails/
-.thumbnails/
-
 # ---------- Logs ----------
 logs/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
 # ---------- Environment / Secrets ----------
 .env
@@ -172,42 +103,3 @@ lerna-debug.log*
 *.pem
 *.key
 *.crt
-
-# ---------- Misc ----------
-# Coverage
-coverage/
-.htmlcov/
-.tox/
-.nox/
-
-# Test artifacts
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.pyre/
-.hypothesis/
-
-# Dependencies lockfiles that should be gitignored if using conda
-conda-env.yml
-
-# User-specific files
-*.user
-*.userosscache
-*.sln.docstates
-
-# Created by Tauri (https://tauri.app)
-# Keep the following lines if Tauri is used
-/src-tauri/gen/*
-/src-tauri/gen/schemas/*
-# End of Tauri-specific ignores
-
-# npm
-.npm/
-.npmrc
-
-# Yarn (if used)
-.yarn/cache/
-.yarn/unplugged/
-.yarn/build-state.yml
-.yarn/install-state.gz
-.pnp.*

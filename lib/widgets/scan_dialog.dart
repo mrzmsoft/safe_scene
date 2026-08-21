@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../models/scan_progress.dart';
 import '../services/scanner_service.dart';
+import '../theme/app_theme.dart';
 
 /// How the scan dialog was dismissed.
 enum ScanDialogCloseReason {
@@ -120,8 +121,6 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
     final fileName = widget.inputPath.split(Platform.pathSeparator).last;
 
     return Dialog(
-      backgroundColor: const Color(0xFF0F172A),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 440),
         child: Padding(
@@ -131,16 +130,24 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.shield, color: Colors.lightBlueAccent),
-                  const SizedBox(width: 10),
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      gradient: AppGradients.brand,
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: const Icon(
+                      Icons.shield,
+                      size: 20,
+                      color: AppColors.onBrand,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Text(
                       'Scanning for Family Mode',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: Theme.of(context).textTheme.titleLarge,
                     ),
                   ),
                   Container(
@@ -149,13 +156,16 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
                       vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.lightBlueAccent.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
+                      color: AppColors.brand.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                      border: Border.all(
+                        color: AppColors.brand.withValues(alpha: 0.5),
+                      ),
                     ),
                     child: Text(
                       _progress.phase.label,
                       style: const TextStyle(
-                        color: Colors.lightBlueAccent,
+                        color: AppColors.brandSoft,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -168,7 +178,10 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
                 fileName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white54, fontSize: 12),
+                style: const TextStyle(
+                  color: AppColors.textMuted,
+                  fontSize: 12,
+                ),
               ),
               const SizedBox(height: 22),
               SizedBox(
@@ -180,8 +193,7 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
                     CircularProgressIndicator(
                       value: _progress.percentage,
                       strokeWidth: 10,
-                      backgroundColor: Colors.white12,
-                      color: Colors.lightBlueAccent,
+                      backgroundColor: AppColors.border,
                     ),
                     Column(
                       mainAxisSize: MainAxisSize.min,
@@ -189,15 +201,15 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
                         Text(
                           '$percent%',
                           style: const TextStyle(
-                            color: Colors.white,
+                            color: AppColors.textPrimary,
                             fontSize: 28,
-                            fontWeight: FontWeight.bold,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                         const SizedBox(height: 2),
                         const Icon(
                           Icons.auto_awesome,
-                          color: Colors.white38,
+                          color: AppColors.brand,
                           size: 18,
                         ),
                       ],
@@ -212,7 +224,7 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
                     child: _CounterCard(
                       label: 'Visual Scenes Flagged',
                       value: _progress.visualFlagged,
-                      color: Colors.redAccent,
+                      color: AppColors.skip,
                       icon: Icons.visibility_off,
                     ),
                   ),
@@ -221,7 +233,7 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
                     child: _CounterCard(
                       label: 'Profanities Flagged',
                       value: _progress.profanityFlagged,
-                      color: Colors.amber,
+                      color: AppColors.mute,
                       icon: Icons.volume_off,
                     ),
                   ),
@@ -264,8 +276,6 @@ class _ScanDialogWidgetState extends State<ScanDialogWidget> {
                       icon: Icon(_error == null ? Icons.cancel : Icons.close),
                       label: Text(_error == null ? 'Cancel' : 'Close'),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white70,
-                        side: const BorderSide(color: Colors.white24),
                         padding: const EdgeInsets.symmetric(vertical: 14),
                       ),
                     ),
@@ -311,7 +321,7 @@ class _CounterCard extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(AppRadii.md),
         border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
       child: Column(
@@ -331,7 +341,7 @@ class _CounterCard extends StatelessWidget {
           Text(
             label,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white70, fontSize: 11),
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
           ),
         ],
       ),

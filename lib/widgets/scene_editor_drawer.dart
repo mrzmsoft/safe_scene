@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../controllers/safe_player_controller.dart';
 import '../models/filter_segment.dart';
+import '../theme/app_theme.dart';
 
 /// A side panel for reviewing, searching and precisely controlling every
 /// flagged [FilterSegment].
@@ -131,14 +132,14 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0F172A),
+        backgroundColor: AppColors.surfaceContainer,
         title: const Text(
           'Clear all segments?',
-          style: TextStyle(color: Colors.white),
+          style: TextStyle(color: AppColors.textPrimary),
         ),
         content: const Text(
           'This removes every rule from the current list. It cannot be undone.',
-          style: TextStyle(color: Colors.white70),
+          style: TextStyle(color: AppColors.textSecondary),
         ),
         actions: [
           TextButton(
@@ -146,7 +147,7 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
             onPressed: () {
               widget.controller.replaceSegments(const []);
               Navigator.of(ctx).pop();
@@ -203,8 +204,8 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
         return Container(
           width: widget.width,
           decoration: const BoxDecoration(
-            color: Color(0xFF0F172A),
-            border: Border(left: BorderSide(color: Colors.white12)),
+            color: AppColors.surfaceContainer,
+            border: Border(left: BorderSide(color: AppColors.borderFaint)),
           ),
           child: Column(
             children: [
@@ -224,7 +225,7 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
                   duration: _duration,
                   onSeek: _seek,
                 ),
-              const Divider(height: 1, color: Colors.white12),
+              const Divider(height: 1, color: AppColors.borderFaint),
               Expanded(child: _buildList(segments)),
             ],
           ),
@@ -237,17 +238,17 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
       decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Colors.white12)),
+        border: Border(bottom: BorderSide(color: AppColors.borderFaint)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.edit_note, color: Colors.white70, size: 20),
+          const Icon(Icons.edit_note, color: AppColors.textSecondary, size: 20),
           const SizedBox(width: 8),
           const Expanded(
             child: Text(
               'Scene Editor',
               style: TextStyle(
-                color: Colors.white,
+                color: AppColors.textPrimary,
                 fontWeight: FontWeight.w600,
                 fontSize: 16,
               ),
@@ -256,19 +257,19 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
           IconButton(
             icon: Icon(
               _searchOpen ? Icons.search_off : Icons.search,
-              color: Colors.white70,
+              color: AppColors.textSecondary,
               size: 20,
             ),
             tooltip: _searchOpen ? 'Hide search' : 'Search segments',
             onPressed: () => setState(() => _searchOpen = !_searchOpen),
           ),
           IconButton(
-            icon: const Icon(Icons.delete_sweep, color: Colors.white70, size: 20),
+            icon: const Icon(Icons.delete_sweep, color: AppColors.textSecondary, size: 20),
             tooltip: 'Clear all segments',
             onPressed: segments.isEmpty ? null : _clearAll,
           ),
           IconButton(
-            icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+            icon: const Icon(Icons.close, color: AppColors.textSecondary, size: 20),
             tooltip: 'Close editor (E)',
             onPressed: widget.onClose,
           ),
@@ -290,23 +291,23 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
         runSpacing: 4,
         children: [
           _LegendChip(
-            color: const Color(0xFFEF4444),
+            color: AppColors.skip,
             icon: Icons.fast_forward,
             label: '$skip skip',
           ),
           _LegendChip(
-            color: const Color(0xFFFBBF24),
+            color: AppColors.mute,
             icon: Icons.volume_off,
             label: '$mute mute',
           ),
           _LegendChip(
-            color: const Color(0xFF8B5CF6),
+            color: AppColors.blackout,
             icon: Icons.visibility_off,
             label: '$blackout blackout',
           ),
           if (off > 0)
             _LegendChip(
-              color: const Color(0xFF9CA3AF),
+              color: AppColors.textMuted,
               icon: Icons.pause_circle_outline,
               label: '$off off',
             ),
@@ -332,10 +333,10 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
                 children: entries.entries.map((e) {
                   final selected = _actionFilter == e.key;
                   final color = switch (e.key) {
-                    FilterAction.skip => const Color(0xFFEF4444),
-                    FilterAction.mute => const Color(0xFFFBBF24),
-                    FilterAction.blackout => const Color(0xFF8B5CF6),
-                    null => Colors.white70,
+                    FilterAction.skip => AppColors.skip,
+                    FilterAction.mute => AppColors.mute,
+                    FilterAction.blackout => AppColors.blackout,
+                    null => AppColors.textSecondary,
                   };
                   return Padding(
                     padding: const EdgeInsets.only(right: 6),
@@ -347,7 +348,7 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
                       ),
                       selected: selected,
                       selectedColor: color.withValues(alpha: 0.9),
-                      backgroundColor: const Color(0xFF1E293B),
+                      backgroundColor: AppColors.surfaceElevated,
                       side: BorderSide(color: color.withValues(alpha: 0.4)),
                       onSelected: (_) => setState(() => _actionFilter = e.key),
                       visualDensity: VisualDensity.compact,
@@ -358,23 +359,23 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
             ),
           ),
           PopupMenuButton<_SegmentSort>(
-            icon: const Icon(Icons.sort, color: Colors.white70, size: 20),
+            icon: const Icon(Icons.sort, color: AppColors.textSecondary, size: 20),
             tooltip: 'Sort segments',
-            color: const Color(0xFF1E293B),
+            color: AppColors.surfaceElevated,
             initialValue: _sort,
             onSelected: (s) => setState(() => _sort = s),
             itemBuilder: (ctx) => const [
               PopupMenuItem(
                 value: _SegmentSort.timeAsc,
-                child: Text('Time · first to last', style: TextStyle(color: Colors.white)),
+                child: Text('Time · first to last', style: TextStyle(color: AppColors.textPrimary)),
               ),
               PopupMenuItem(
                 value: _SegmentSort.timeDesc,
-                child: Text('Time · last to first', style: TextStyle(color: Colors.white)),
+                child: Text('Time · last to first', style: TextStyle(color: AppColors.textPrimary)),
               ),
               PopupMenuItem(
                 value: _SegmentSort.longest,
-                child: Text('Longest first', style: TextStyle(color: Colors.white)),
+                child: Text('Longest first', style: TextStyle(color: AppColors.textPrimary)),
               ),
             ],
           ),
@@ -388,20 +389,20 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
       child: TextField(
         autofocus: true,
-        style: const TextStyle(color: Colors.white, fontSize: 13),
+        style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
         decoration: InputDecoration(
           hintText: 'Filter by category, source or id…',
-          hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
-          prefixIcon: const Icon(Icons.filter_list, color: Colors.white54, size: 18),
+          hintStyle: const TextStyle(color: AppColors.textFaint, fontSize: 13),
+          prefixIcon: const Icon(Icons.filter_list, color: AppColors.textMuted, size: 18),
           suffixIcon: _query.isEmpty
               ? null
               : IconButton(
-                  icon: const Icon(Icons.clear, color: Colors.white54, size: 16),
+                  icon: const Icon(Icons.clear, color: AppColors.textMuted, size: 16),
                   onPressed: () => setState(() => _query = ''),
                 ),
           isDense: true,
           filled: true,
-          fillColor: const Color(0xFF1E293B),
+          fillColor: AppColors.surfaceElevated,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
             borderSide: BorderSide.none,
@@ -421,7 +422,7 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
           child: Text(
             'No flagged segments.\nUse [ and ] to mark, then save above.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white38, fontSize: 13),
+            style: TextStyle(color: AppColors.textFaint, fontSize: 13),
           ),
         ),
       );
@@ -432,7 +433,7 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
           padding: EdgeInsets.all(24),
           child: Text(
             'No segments match the current filter.',
-            style: TextStyle(color: Colors.white38, fontSize: 13),
+            style: TextStyle(color: AppColors.textFaint, fontSize: 13),
           ),
         ),
       );
@@ -440,7 +441,7 @@ class _SceneEditorDrawerState extends State<SceneEditorDrawer> {
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: segments.length,
-      separatorBuilder: (_, _) => const Divider(height: 1, color: Colors.white12),
+      separatorBuilder: (_, _) => const Divider(height: 1, color: AppColors.borderFaint),
       itemBuilder: (context, index) {
         final segment = segments[index];
         return _SegmentTile(
@@ -477,9 +478,9 @@ class _SegmentTile extends StatelessWidget {
   final VoidCallback onJumpToStart;
 
   Color get _color => switch (segment.action) {
-        FilterAction.skip => const Color(0xFFEF4444),
-        FilterAction.mute => const Color(0xFFFBBF24),
-        FilterAction.blackout => const Color(0xFF8B5CF6),
+        FilterAction.skip => AppColors.skip,
+        FilterAction.mute => AppColors.mute,
+        FilterAction.blackout => AppColors.blackout,
       };
 
   @override
@@ -492,7 +493,7 @@ class _SegmentTile extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
         decoration: BoxDecoration(
           border: Border(
-            left: BorderSide(color: dimmed ? Colors.white24 : _color, width: 3),
+            left: BorderSide(color: dimmed ? AppColors.border : _color, width: 3),
           ),
         ),
         child: Column(
@@ -510,7 +511,7 @@ class _SegmentTile extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      color: Colors.white,
+                      color: AppColors.textPrimary,
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                     ),
@@ -528,7 +529,7 @@ class _SegmentTile extends StatelessWidget {
             Text(
               '${_formatMs(segment.start)} → ${_formatMs(segment.end)} · ${_formatLength(segment.length)}',
               style: const TextStyle(
-                color: Colors.white70,
+                color: AppColors.textSecondary,
                 fontSize: 12,
                 fontFeatures: [FontFeature.tabularFigures()],
               ),
@@ -622,9 +623,9 @@ class _ActionChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = switch (action) {
-      FilterAction.skip => const Color(0xFFEF4444),
-      FilterAction.mute => const Color(0xFFFBBF24),
-      FilterAction.blackout => const Color(0xFF8B5CF6),
+      FilterAction.skip => AppColors.skip,
+      FilterAction.mute => AppColors.mute,
+      FilterAction.blackout => AppColors.blackout,
     };
     final icon = switch (action) {
       FilterAction.skip => Icons.fast_forward,
@@ -669,12 +670,12 @@ class _MetaChip extends StatelessWidget {
       margin: const EdgeInsets.only(right: 6),
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
+        color: AppColors.surfaceElevated,
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
         text,
-        style: const TextStyle(color: Colors.white38, fontSize: 10),
+        style: const TextStyle(color: AppColors.textFaint, fontSize: 10),
       ),
     );
   }
@@ -696,7 +697,7 @@ class _TileButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = destructive ? Colors.redAccent : Colors.white54;
+    final color = destructive ? AppColors.danger : AppColors.textMuted;
     return IconButton(
       icon: Icon(icon, size: 16, color: color),
       tooltip: tooltip,
@@ -766,7 +767,7 @@ class _SegmentMapPainter extends CustomPainter {
         Rect.fromLTWH(0, centerY - 2, size.width, 4),
         const Radius.circular(2),
       ),
-      Paint()..color = const Color(0xFF334155),
+      Paint()..color = AppColors.border,
     );
     for (final s in segments) {
       if (durationMs <= 0) continue;
@@ -776,9 +777,9 @@ class _SegmentMapPainter extends CustomPainter {
           .clamp(0.0, size.width);
       if (finish <= begin) continue;
       final color = switch (s.action) {
-        FilterAction.skip => const Color(0xFFEF4444),
-        FilterAction.mute => const Color(0xFFFBBF24),
-        FilterAction.blackout => const Color(0xFF8B5CF6),
+        FilterAction.skip => AppColors.skip,
+        FilterAction.mute => AppColors.mute,
+        FilterAction.blackout => AppColors.blackout,
       };
       canvas.drawRRect(
         RRect.fromRectAndRadius(
@@ -827,14 +828,14 @@ class _TimeRow extends StatelessWidget {
           width: 40,
           child: Text(
             label,
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
           ),
         ),
         Expanded(
           child: TextField(
             controller: controller,
             style: const TextStyle(
-              color: Colors.white,
+              color: AppColors.textPrimary,
               fontSize: 12.5,
               fontFeatures: [FontFeature.tabularFigures()],
             ),
@@ -845,28 +846,28 @@ class _TimeRow extends StatelessWidget {
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Colors.white24),
+                borderSide: const BorderSide(color: AppColors.border),
               ),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Colors.white24),
+                borderSide: const BorderSide(color: AppColors.border),
               ),
             ),
             onChanged: onEdited,
           ),
         ),
         IconButton(
-          icon: const Icon(Icons.gps_fixed, size: 16, color: Colors.lightBlueAccent),
+          icon: const Icon(Icons.gps_fixed, size: 16, color: AppColors.brand),
           tooltip: 'Set $label to playhead',
           onPressed: onSetToPlayhead,
         ),
         IconButton(
-          icon: const Icon(Icons.remove_circle_outline, size: 18, color: Colors.white54),
+          icon: const Icon(Icons.remove_circle_outline, size: 18, color: AppColors.textMuted),
           tooltip: '$label −${_stepLabel(step)}',
           onPressed: () => onNudge(-step.inMilliseconds),
         ),
         IconButton(
-          icon: const Icon(Icons.add_circle_outline, size: 18, color: Colors.white54),
+          icon: const Icon(Icons.add_circle_outline, size: 18, color: AppColors.textMuted),
           tooltip: '$label +${_stepLabel(step)}',
           onPressed: () => onNudge(step.inMilliseconds),
         ),
@@ -1000,7 +1001,7 @@ class _TimeEditSectionState extends State<_TimeEditSection> {
       children: [
         const Text(
           'Fine-tune step',
-          style: TextStyle(color: Colors.white54, fontSize: 12),
+          style: TextStyle(color: AppColors.textMuted, fontSize: 12),
         ),
         const SizedBox(height: 4),
         SegmentedButton<Duration>(
@@ -1138,8 +1139,8 @@ class _SegmentEditDialogState extends State<_SegmentEditDialog> {
     final canSave = !_timeInvalid && _overlapHint == null;
     final confidence = widget.segment.confidence;
     return AlertDialog(
-      backgroundColor: const Color(0xFF0F172A),
-      title: const Text('Edit Segment', style: TextStyle(color: Colors.white)),
+      backgroundColor: AppColors.surfaceContainer,
+      title: const Text('Edit Segment', style: TextStyle(color: AppColors.textPrimary)),
       content: SizedBox(
         width: 480,
         child: SingleChildScrollView(
@@ -1172,12 +1173,12 @@ class _SegmentEditDialogState extends State<_SegmentEditDialog> {
               const SizedBox(height: 12),
               TextField(
                 controller: _categoryCtrl,
-                style: const TextStyle(color: Colors.white),
+                style: const TextStyle(color: AppColors.textPrimary),
                 decoration: const InputDecoration(
                   labelText: 'Category',
-                  labelStyle: TextStyle(color: Colors.white54),
+                  labelStyle: TextStyle(color: AppColors.textMuted),
                   hintText: 'e.g. explicit_nudity',
-                  hintStyle: TextStyle(color: Colors.white38),
+                  hintStyle: TextStyle(color: AppColors.textFaint),
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -1185,21 +1186,21 @@ class _SegmentEditDialogState extends State<_SegmentEditDialog> {
                 contentPadding: EdgeInsets.zero,
                 title: const Text(
                   'Enabled',
-                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
                 ),
                 subtitle: const Text(
                   'Disabled rules are kept but ignored by the player.',
-                  style: TextStyle(color: Colors.white38, fontSize: 11),
+                  style: TextStyle(color: AppColors.textFaint, fontSize: 11),
                 ),
                 value: _enabled,
                 activeTrackColor: switch (_action) {
-                  FilterAction.skip => const Color(0xFFEF4444),
-                  FilterAction.mute => const Color(0xFFFBBF24),
-                  FilterAction.blackout => const Color(0xFF8B5CF6),
+                  FilterAction.skip => AppColors.skip,
+                  FilterAction.mute => AppColors.mute,
+                  FilterAction.blackout => AppColors.blackout,
                 },
                 onChanged: (v) => setState(() => _enabled = v),
               ),
-              const Divider(height: 24, color: Colors.white12),
+              const Divider(height: 24, color: AppColors.borderFaint),
               _TimeEditSection(
                 start: _start,
                 end: _end,
@@ -1213,12 +1214,12 @@ class _SegmentEditDialogState extends State<_SegmentEditDialog> {
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.red.withValues(alpha: 0.15),
+                    color: AppColors.danger.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
                     _overlapHint!,
-                    style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                    style: const TextStyle(color: AppColors.danger, fontSize: 12),
                   ),
                 ),
               ],
@@ -1352,10 +1353,10 @@ class _NewSegmentDialogState extends State<_NewSegmentDialog> {
   Widget build(BuildContext context) {
     final canSave = !_timeInvalid && _overlapHint == null;
     return AlertDialog(
-      backgroundColor: const Color(0xFF0F172A),
+      backgroundColor: AppColors.surfaceContainer,
       title: const Text(
         'New Flagged Segment',
-        style: TextStyle(color: Colors.white),
+        style: TextStyle(color: AppColors.textPrimary),
       ),
       content: SizedBox(
         width: 480,
@@ -1366,7 +1367,7 @@ class _NewSegmentDialogState extends State<_NewSegmentDialog> {
             children: [
               Text(
                 '${_formatMs(widget.start)} → ${_formatMs(widget.end)}',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
               ),
               const SizedBox(height: 12),
               SegmentedButton<FilterAction>(
@@ -1394,12 +1395,12 @@ class _NewSegmentDialogState extends State<_NewSegmentDialog> {
               const SizedBox(height: 12),
               TextField(
                 controller: _categoryCtrl,
-                style: const TextStyle(color: Colors.white),
+                style: const TextStyle(color: AppColors.textPrimary),
                 decoration: const InputDecoration(
                   labelText: 'Category',
-                  labelStyle: TextStyle(color: Colors.white54),
+                  labelStyle: TextStyle(color: AppColors.textMuted),
                   hintText: 'e.g. explicit_nudity',
-                  hintStyle: TextStyle(color: Colors.white38),
+                  hintStyle: TextStyle(color: AppColors.textFaint),
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -1407,17 +1408,17 @@ class _NewSegmentDialogState extends State<_NewSegmentDialog> {
                 contentPadding: EdgeInsets.zero,
                 title: const Text(
                   'Enabled',
-                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
                 ),
                 value: _enabled,
                 activeTrackColor: switch (_action) {
-                  FilterAction.skip => const Color(0xFFEF4444),
-                  FilterAction.mute => const Color(0xFFFBBF24),
-                  FilterAction.blackout => const Color(0xFF8B5CF6),
+                  FilterAction.skip => AppColors.skip,
+                  FilterAction.mute => AppColors.mute,
+                  FilterAction.blackout => AppColors.blackout,
                 },
                 onChanged: (v) => setState(() => _enabled = v),
               ),
-              const Divider(height: 24, color: Colors.white12),
+              const Divider(height: 24, color: AppColors.borderFaint),
               _TimeEditSection(
                 start: _start,
                 end: _end,
@@ -1431,12 +1432,12 @@ class _NewSegmentDialogState extends State<_NewSegmentDialog> {
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.red.withValues(alpha: 0.15),
+                    color: AppColors.danger.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
                     _overlapHint!,
-                    style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                    style: const TextStyle(color: AppColors.danger, fontSize: 12),
                   ),
                 ),
               ],
@@ -1478,12 +1479,12 @@ class _SaveNewCard extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
+        color: AppColors.surfaceElevated,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         children: [
-          const Icon(Icons.add_box_outlined, color: Colors.white54, size: 18),
+          const Icon(Icons.add_box_outlined, color: AppColors.textMuted, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -1492,17 +1493,17 @@ class _SaveNewCard extends StatelessWidget {
                   : 'Mark [start] and ]end], then add',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
             ),
           ),
           if (both) ...[
             IconButton(
-              icon: const Icon(Icons.add_circle, color: Colors.lightBlueAccent, size: 22),
+              icon: const Icon(Icons.add_circle, color: AppColors.brand, size: 22),
               tooltip: 'Add segment from marks',
               onPressed: onSave,
             ),
             IconButton(
-              icon: const Icon(Icons.clear, color: Colors.white38, size: 18),
+              icon: const Icon(Icons.clear, color: AppColors.textFaint, size: 18),
               tooltip: 'Clear marks',
               onPressed: onClear,
             ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/filter_segment.dart';
+import '../theme/app_theme.dart';
 
 /// A custom timeline seek bar that replaces the standard Material [Slider].
 ///
@@ -162,7 +163,7 @@ class _SeekBarPainter extends CustomPainter {
         Rect.fromLTWH(0, centerY - trackHeight / 2, size.width, trackHeight),
         Radius.circular(trackHeight / 2),
       ),
-      Paint()..color = Colors.white24,
+      Paint()..color = Colors.white.withValues(alpha: 0.18),
     );
 
     // Progress fill.
@@ -173,7 +174,7 @@ class _SeekBarPainter extends CustomPainter {
           Rect.fromLTWH(0, centerY - trackHeight / 2, filledWidth, trackHeight),
           Radius.circular(trackHeight / 2),
         ),
-        Paint()..color = const Color(0xFF0EA5E9),
+        Paint()..color = AppColors.brand,
       );
     }
 
@@ -186,11 +187,7 @@ class _SeekBarPainter extends CustomPainter {
       final finish = (end / durationMs * size.width).clamp(0.0, size.width);
       if (finish < begin) continue;
 
-      final color = switch (segment.action) {
-        FilterAction.skip => const Color(0xFFEF4444),
-        FilterAction.mute => const Color(0xFFFBBF24),
-        FilterAction.blackout => const Color(0xFF8B5CF6),
-      };
+      final color = appActionColor(segment.action);
 
       canvas.drawRRect(
         RRect.fromRectAndRadius(
@@ -233,18 +230,21 @@ class _SegmentTooltip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = switch (segment.action) {
-      FilterAction.skip => const Color(0xFFEF4444),
-      FilterAction.mute => const Color(0xFFFBBF24),
-      FilterAction.blackout => const Color(0xFF8B5CF6),
-    };
+    final color = appActionColor(segment.action);
     return Container(
       width: 220,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xEE1E293B),
-        borderRadius: BorderRadius.circular(8),
+        color: AppColors.overlay.withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(AppRadii.sm),
         border: Border.all(color: color.withValues(alpha: 0.6)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -266,7 +266,7 @@ class _SegmentTooltip extends StatelessWidget {
                               : segment.category) +
                       (segment.enabled ? '' : ' — disabled'),
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: AppColors.textPrimary,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
@@ -274,7 +274,10 @@ class _SegmentTooltip extends StatelessWidget {
                 ),
                 Text(
                   '${_format(segment.start)} – ${_format(segment.end)}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 11,
+                  ),
                 ),
               ],
             ),
